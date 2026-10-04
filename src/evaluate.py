@@ -2,16 +2,15 @@ import argparse
 import copy
 import json
 import os
-import platform
-import time
 
 import numpy as np
 import torch
 
 from .corruptions import CORRUPTIONS, corrupt
 from .data import GPULoader, load_cifar100, to_device
-from .exits import SCORES, adaptive_forward, ece, fit_temperature
+from .exits import SCORES, ece, fit_temperature
 from .flops import count_params, exit_costs
+from .latency import batch1_latency, cpu_name, throughput
 from .models import build_model
 
 SEVERITIES = (1, 2, 3, 4, 5)
@@ -40,38 +39,6 @@ def predict(model, x, y, transform=None):
 
 def per_exit_acc(logits, labels):
     return logits.argmax(-1).eq(labels).float().mean(1).tolist()
-
-
-def _sync(dev):
-    if dev.type == "cuda":
-        torch.cuda.synchronize(dev)
-
-
-def batch1_latency(model, xs, dev, **kw):
-    """Mean milliseconds per image when images arrive one at a time."""
-    for i in range(min(20, len(xs))):
-        adaptive_forward(model, xs[i:i + 1], **kw)
-    _sync(dev)
-    preds, exits = [], []
-    t0 = time.perf_counter()
-    for i in range(len(xs)):
-        p, e = adaptive_forward(model, xs[i:i + 1], **kw)
-        preds.append(p)
-        exits.append(e)
-    _sync(dev)
-    ms = (time.perf_counter() - t0) * 1000 / len(xs)
-    return ms, torch.cat(preds).cpu(), torch.cat(exits).cpu()
-
-
-def throughput(model, xs, dev, bs=256, **kw):
-    for i in range(0, min(len(xs), 4 * bs), bs):
-        adaptive_forward(model, xs[i:i + bs], **kw)
-    _sync(dev)
-    t0 = time.perf_counter()
-    for i in range(0, len(xs), bs):
-        adaptive_forward(model, xs[i:i + bs], **kw)
-    _sync(dev)
-    return len(xs) / (time.perf_counter() - t0)
 
 
 def _policies(temps):
@@ -104,14 +71,6 @@ def throughput_suite(model, xs, dev, temps):
             row["img_per_s"] = throughput(model, xs, dev, **kw)
             res["adaptive"].append(row)
     return res
-
-
-def cpu_name():
-    try:
-        with open("/proc/cpuinfo") as f:
-            return next(line.split(":", 1)[1].strip() for line in f if line.startswith("model name"))
-    except (OSError, StopIteration):
-        return platform.processor()
 
 
 def main():

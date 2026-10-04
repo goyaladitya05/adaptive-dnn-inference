@@ -1,6 +1,7 @@
 """Exit criteria, temperature scaling, calibration metrics and early-exit inference."""
 import math
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -110,3 +111,54 @@ def adaptive_forward(model, x, score, thresh, temps=None, force_exit=None):
                 break
             alive, h = alive[keep], h[keep]
     return preds, exit_at
+
+
+THRESH = np.unique(np.concatenate([np.linspace(0, 0.9, 91), np.linspace(0.9, 1.0, 201), [1.01]]))
+POLICIES = [("max_prob", False, "Max-prob"), ("entropy", False, "Entropy"),
+            ("max_prob", True, "Max-prob + TS"), ("entropy", True, "Entropy + TS")]
+
+
+def exit_scores(logits, policy, calibrated, temps):
+    """Scores of the non-final exits as a [K-1, N] array."""
+    k = logits.shape[0]
+    return np.stack([SCORES[policy](logits[i], temps[i] if calibrated else 1.0).numpy() for i in range(k - 1)])
+
+
+def route(scores, th):
+    """First exit whose score clears its threshold (one value, or one per exit), else the last exit."""
+    th = np.asarray(th, dtype=float)
+    if th.ndim:
+        th = th[:, None]
+    hit = np.vstack([scores >= th, np.ones((1, scores.shape[1]), bool)])
+    return hit.argmax(0)
+
+
+def routing_stats(exit_at, correct, costs):
+    k, n = correct.shape
+    return {"acc": float(correct[exit_at, np.arange(n)].mean()), "cost": float(np.asarray(costs)[exit_at].mean()),
+            "exit_frac": (np.bincount(exit_at, minlength=k) / n).tolist()}
+
+
+def sweep(scores, correct, costs, grid=THRESH):
+    return [dict(thresh=float(t), **routing_stats(route(scores, t), correct, costs)) for t in grid]
+
+
+def pick_threshold(rows, target):
+    """Cheapest threshold whose accuracy reaches the target."""
+    ok = [r for r in rows if r["acc"] >= target]
+    return min(ok, key=lambda r: (r["cost"], -r["acc"]))["thresh"]
+
+
+def tune_per_exit(scores, correct, costs, target, init, grid=THRESH, passes=3):
+    """Coordinate descent over one threshold per exit, minimising cost subject to accuracy >= target."""
+    th = np.full(scores.shape[0], float(init))
+    best = routing_stats(route(scores, th), correct, costs)
+    for _ in range(passes):
+        for k in range(len(th)):
+            for t in grid:
+                cand = th.copy()
+                cand[k] = t
+                r = routing_stats(route(scores, cand), correct, costs)
+                if r["acc"] >= target and (r["cost"], -r["acc"]) < (best["cost"], -best["acc"]):
+                    th, best = cand, r
+    return th.tolist(), best

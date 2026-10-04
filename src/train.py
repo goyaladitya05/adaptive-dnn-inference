@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .data import GPULoader, load_cifar100, to_device
+from .data import ChunkRandAugment, GPULoader, load_cifar100, to_device
 from .models import build_model
 
 
@@ -26,6 +26,9 @@ def parse_args():
     p.add_argument("--label-smoothing", type=float, default=0.0)
     p.add_argument("--mix", action="store_true", help="mixup or cutmix on every batch")
     p.add_argument("--clip", type=float, default=0.0)
+    p.add_argument("--distill", type=float, default=0.0, help="weight of self-distillation from the final exit")
+    p.add_argument("--kd-temp", type=float, default=3.0)
+    p.add_argument("--randaug", action="store_true")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default="cuda")
     p.add_argument("--limit", type=int, default=0, help="train on the first N images (smoke tests)")
@@ -47,14 +50,23 @@ def mix_batch(x, y):
     return x, y, y[perm], 1 - (y1 - y0) * (x1 - x0) / (h * w)
 
 
-def multi_exit_loss(outs, ya, yb, lam, ls):
-    """Equal-weight average of the cross-entropy at every exit."""
-    loss = 0.0
-    for o in outs:
-        loss = loss + lam * F.cross_entropy(o, ya, label_smoothing=ls)
+def multi_exit_loss(outs, ya, yb, lam, ls, alpha=0.0, tau=3.0):
+    """Equal-weight average over exits; early exits optionally also match the final exit (self-distillation)."""
+    def ce(o):
+        loss = lam * F.cross_entropy(o, ya, label_smoothing=ls)
         if lam < 1:
             loss = loss + (1 - lam) * F.cross_entropy(o, yb, label_smoothing=ls)
-    return loss / len(outs)
+        return loss
+
+    teacher = F.softmax(outs[-1].detach().float() / tau, -1)
+    total = ce(outs[-1])
+    for o in outs[:-1]:
+        loss = ce(o)
+        if alpha:
+            kd = F.kl_div(F.log_softmax(o.float() / tau, -1), teacher, reduction="batchmean") * tau ** 2
+            loss = (1 - alpha) * loss + alpha * kd
+        total = total + loss
+    return total / len(outs)
 
 
 @torch.no_grad()
@@ -84,7 +96,7 @@ def main():
     if args.limit:
         xtr, ytr = xtr[:args.limit], ytr[:args.limit]
     xva, yva = to_device(data["val"], dev)
-    train_loader = GPULoader(xtr, ytr, args.bs, train=True)
+    train_loader = GPULoader(xtr, ytr, args.bs, train=True, transform=ChunkRandAugment() if args.randaug else None)
     val_loader = GPULoader(xva, yva, 500)
 
     model = build_model(args.model).to(dev)
@@ -110,7 +122,7 @@ def main():
             if args.mix:
                 x, ya, yb, lam = mix_batch(x, y)
             with torch.autocast("cuda", dtype=torch.float16, enabled=amp):
-                loss = multi_exit_loss(model(x), ya, yb, lam, args.label_smoothing)
+                loss = multi_exit_loss(model(x), ya, yb, lam, args.label_smoothing, args.distill, args.kd_temp)
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             if args.clip:

@@ -74,3 +74,10 @@ def ee_resnet18(num_classes=100):
         PoolHead(512, num_classes),
     ]
     return MultiExitNet(segments, heads)
+
+
+def ee_resnet18_pool(num_classes=100):
+    """Ablation: exits after each stage with only pooling and a linear layer (SDN-style cheap heads)."""
+    s = _stages()
+    segments = [nn.Sequential(_stem(), s[0]), s[1], s[2], s[3]]
+    return MultiExitNet(segments, [PoolHead(c, num_classes) for c in (64, 128, 256, 512)])

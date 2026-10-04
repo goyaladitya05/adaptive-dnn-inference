@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torchvision.datasets import CIFAR100
+from torchvision.transforms import v2
 
 NUM_CLASSES = 100
 MEAN = (0.5071, 0.4865, 0.4409)
@@ -48,6 +49,18 @@ def augment(x, pad=4):
           i[:, None, :, None], j[:, None, None, :]]
     flip = torch.rand(n, device=x.device) < 0.5
     return torch.where(flip[:, None, None, None], x.flip(3), x)
+
+
+class ChunkRandAugment:
+    """RandAugment on the GPU; each chunk of the batch draws its own operations."""
+
+    def __init__(self, chunk=32, num_ops=2, magnitude=9):
+        self.op = v2.RandAugment(num_ops=num_ops, magnitude=magnitude)
+        self.chunk = chunk
+
+    def __call__(self, x):
+        u8 = (x * 255).round().to(torch.uint8)
+        return torch.cat([self.op(c) for c in u8.split(self.chunk)]).float().div_(255)
 
 
 class GPULoader:
