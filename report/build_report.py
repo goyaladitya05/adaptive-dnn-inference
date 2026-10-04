@@ -5,18 +5,17 @@ import subprocess
 import sys
 
 from docx import Document
-from docx.enum.section import WD_SECTION
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt, RGBColor
+from docx.shared import Cm, Pt
 
 import content as C
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-RESULTS = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "results")
+RESULTS = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "results", "interim")
 FIG = os.path.join(RESULTS, "figures")
 OUT = os.path.join(sys.argv[2] if len(sys.argv) > 2 else HERE, "Interim_Report.docx")
 FONT = "Times New Roman"

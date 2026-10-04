@@ -422,7 +422,7 @@ def plot_dataset(out, data_root):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--out", default="results")
+    p.add_argument("--out", default="results/interim")
     p.add_argument("--data", default="data")
     args = p.parse_args()
     os.makedirs(os.path.join(args.out, "figures"), exist_ok=True)

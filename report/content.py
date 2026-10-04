@@ -284,7 +284,7 @@ def narrative(S):
         ef5 = {k: _mean_corr(S, m, k, "5", "early_frac") for k in ("Max-prob", "Entropy + TS")}
         ea5 = {k: _mean_corr(S, m, k, "5", "early_acc") for k in ("Max-prob", "Entropy + TS")}
         imp = S["corruptions"][m]["policies"]["Max-prob"]["impulse_noise"]["5"]
-        e1, e5 = _ece_corr(S, m, "1", "calibrated"), _ece_corr(S, m, "5", "calibrated")
+        e5 = _ece_corr(S, m, "5", "calibrated")
         r5 = _ece_corr(S, m, "5", "raw")
         T["robustness"] = (
             f"With thresholds fixed on clean validation data, the early-exit model keeps the accuracy of full ResNet-18 "
