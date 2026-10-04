@@ -116,8 +116,8 @@ def narrative(S):
         f"lost relative to its own final exit, the early-exit ResNet-18 reaches {pm(mp['acc'])}% (ResNet-18: "
         f"{pm(bacc)}%) with {sav(mp['cost'][0]):.0f}% fewer FLOPs, and per-exit thresholds raise the saving to "
         f"{sav(mpe['cost'][0]):.0f}%. "
-        + (f"The savings become measured speed-ups on a CPU ({sp['cpu1']:.2f}x with one thread) but not for single images "
-           f"on a T4 GPU ({sp['gpu']:.2f}x), where per-exit synchronisation dominates. " if has_lat else "")
+        + (f"The savings become measured speed-ups on a CPU ({sp['cpu1']:.2f}x with one thread) but barely for single "
+           f"images on a T4 GPU ({sp['gpu']:.2f}x), where per-exit synchronisation dominates. " if has_lat else "")
         + f"Temperature scaling lowers the calibration error of every exit from {100 * min(v[0] for v in er):.0f}-"
         f"{100 * max(v[0] for v in er):.0f}% to at most {100 * max(v[0] for v in ec):.1f}% but makes routing on clean data "
         "more expensive. Under corruption the self-distilled CNN exits stay overconfident: at severity 5, "
@@ -223,10 +223,19 @@ def narrative(S):
             f"{e1['ops']['Max-prob']['ms']:.1f} ms, a {sp['cpu1']:.2f}x speed-up; with four threads it is {sp['cpu4']:.2f}x. "
             f"On the T4 at batch 1, the baseline takes {gl['full_ms']:.2f} ms and the early-exit model "
             f"{eg['ops']['Max-prob']['ms']:.2f} ms ({sp['gpu']:.2f}x): small kernels and a GPU-to-CPU synchronisation after "
-            f"every exit dominate, so the FLOP savings do not appear. "
-            + (f"With batches of 256 and exited images removed from the batch, GPU throughput changes by {tp:.2f}x. " if tp else "")
+            f"every exit dominate, so the FLOP savings barely appear. "
+            + (f"With batches of 256 and exited images removed from the batch, GPU throughput {'rises' if tp > 1 else 'falls'} "
+               f"by a factor of {tp:.2f}. " if tp else "")
             + "Early exits therefore pay off for CPU and edge inference, while on GPUs they need batching or kernels "
             "that avoid per-exit synchronisation.")
+        vg, v1, v4 = (_lat(S, "ee_vit_tiny", d) for d in ("gpu", "cpu1", "cpu4"))
+        if vg and v1 and v4 and "Max-prob" in v1.get("ops", {}):
+            T["latency"] += (
+                f" EE-ViT-Tiny shows the same split more strongly: on one CPU thread its operating point takes "
+                f"{v1['ops']['Max-prob']['ms']:.1f} ms against {v1['full_ms']:.1f} ms for its full path, but on the GPU at "
+                f"batch 1 even the operating point takes {vg['ops']['Max-prob']['ms']:.2f} ms, slower than full ResNet-18, "
+                f"because twelve transformer blocks launch many small kernels; four CPU threads do not help its small "
+                f"matrix products ({v4['ops']['Max-prob']['ms']:.1f} ms).")
 
     T["robustness"] = (
         f"With thresholds frozen from clean validation data, max-prob exiting loses accuracy relative to ResNet-18 on "
@@ -261,7 +270,7 @@ def narrative(S):
     T["obj2"] = (
         f"With no accuracy loss on validation, the early-exit ResNet-18 uses {sav(mp['cost'][0]):.0f}% fewer FLOPs than "
         f"ResNet-18 ({sav(mpe['cost'][0]):.0f}% with per-exit thresholds) at {pm(mp['acc'])}% against {pm(bacc)}%. "
-        + (f"Measured latency follows FLOPs on a CPU ({sp['cpu1']:.2f}x with one thread) but not on a GPU at batch 1 "
+        + (f"Measured latency follows FLOPs on a CPU ({sp['cpu1']:.2f}x with one thread) but hardly on a GPU at batch 1 "
            f"({sp['gpu']:.2f}x), so FLOP counts alone are not a reliable proxy for speed." if has_lat else ""))
     T["obj3"] = (
         "Raw confidence is a poor routing signal under distribution shift: the self-distilled exits keep stopping "
