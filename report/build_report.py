@@ -66,7 +66,9 @@ class Report:
                 r.font.size = Pt(size)
 
     def body(self, text):
-        return self.para(text, align="justify")
+        for chunk in text.split("\n"):
+            if chunk:
+                self.para(chunk, align="justify")
 
     def h1(self, text):
         p = self.para(text, bold=True, size=13, before=10, after=4)

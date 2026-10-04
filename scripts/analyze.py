@@ -36,7 +36,7 @@ plt.rcParams.update({
     "figure.dpi": 110, "savefig.dpi": 220, "font.size": 9, "axes.titlesize": 10, "axes.labelsize": 9,
     "axes.edgecolor": INK2, "axes.labelcolor": INK, "xtick.color": INK2, "ytick.color": INK2,
     "axes.spines.top": False, "axes.spines.right": False, "axes.grid": True, "grid.color": GRID,
-    "grid.linewidth": 0.6, "legend.frameon": False, "lines.linewidth": 1.6, "lines.markersize": 5,
+    "grid.linewidth": 0.6, "axes.axisbelow": True, "legend.frameon": False, "lines.linewidth": 1.6, "lines.markersize": 5,
     "font.family": "DejaVu Sans",
 })
 
@@ -148,7 +148,8 @@ def analyze_policies(runs, out, summary):
         ax.plot(costs, [100 * a for a in r["acc"]["test"]], "s", color=INK2, ms=5, label="Single exit (forced)")
         for i, (c, a) in enumerate(zip(costs, r["acc"]["test"])):
             ax.annotate(f"E{i + 1}", (c, 100 * a), textcoords="offset points", xytext=(5, -10), fontsize=7, color=INK2)
-        ax.plot(base_cost, 100 * base_acc, "*", color=INK, ms=11, label="ResNet-18 full inference")
+        if name == "ee_resnet18":
+            ax.plot(base_cost, 100 * base_acc, "*", color=INK, ms=11, label="ResNet-18 full inference")
         ax.set_title(NAMES[name])
         ax.set_xlabel("Mean GFLOPs per image (test)")
         ax.set_ylabel("Top-1 accuracy (%)")
