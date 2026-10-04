@@ -16,6 +16,7 @@ from .exits import POLICIES, SCORES, adaptive_forward, exit_scores, pick_thresho
 from .models import build_model
 
 GRID = (0.6, 0.8, 0.9, 0.95)
+TOLS = {"strict": 0.0, "relaxed": 0.01}
 
 
 def _sync(dev):
@@ -58,7 +59,7 @@ def cpu_name():
         return platform.processor()
 
 
-def operating_points(run, metrics, tol=0.01):
+def operating_points(run, metrics, tol):
     """Thresholds selected on validation for each policy, with the same rule as the analysis."""
     lv = torch.from_numpy(np.load(os.path.join(run, "logits", "val.npy")).astype(np.float32))
     correct = lv.argmax(-1).numpy() == np.load(os.path.join(run, "logits", "val_labels.npy"))
@@ -68,9 +69,10 @@ def operating_points(run, metrics, tol=0.01):
             for p, cal, label in POLICIES}
 
 
-def configs(metrics, ops):
-    rows = [{"label": label, "policy": p, "calibrated": cal, "thresh": ops[label]} for p, cal, label in POLICIES]
-    rows += [{"label": "Max-prob", "policy": "max_prob", "calibrated": False, "thresh": t} for t in GRID]
+def configs(ops):
+    rows = [{"label": label, "policy": p, "calibrated": cal, "thresh": ops[point][label], "point": point}
+            for point in TOLS for p, cal, label in POLICIES]
+    rows += [{"label": "Max-prob", "policy": "max_prob", "calibrated": False, "thresh": t, "point": "grid"} for t in GRID]
     return rows
 
 
@@ -127,8 +129,8 @@ def main():
         model.load_state_dict(ck["state_dict"])
         model.eval().to(dev)
         temps = metrics["temperature"]
-        ops = operating_points(run, metrics) if model.num_exits > 1 else {}
-        rows = configs(metrics, ops) if model.num_exits > 1 else []
+        ops = {point: operating_points(run, metrics, tol) for point, tol in TOLS.items()} if model.num_exits > 1 else {}
+        rows = configs(ops) if model.num_exits > 1 else []
         out = {"run": os.path.basename(run), "model": ck["model"], "ops": ops}
         if dev.type == "cuda":
             n = args.gpu_images
