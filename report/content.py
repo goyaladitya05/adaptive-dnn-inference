@@ -336,7 +336,7 @@ def pct(v, d=1):
 def write_body(R, S):
     R.para("PART B: INTERIM REPORT", bold=True, size=14, align="center", after=8)
     R.para("Team No. and Names (with Registration Numbers):", bold=True, after=2)
-    R.para("Team No.: __________", after=0)
+    R.para("Team No.: 15", after=0)
     for name, reg in TEAM:
         R.para(f"{name} ({reg})", after=0)
     R.para("Title of the Project:", bold=True, before=6, after=2)
