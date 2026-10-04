@@ -27,6 +27,9 @@ def parse_args():
     p.add_argument("--cpu-images", type=int, default=300)
     p.add_argument("--cpu-threads", type=int, default=1)
     p.add_argument("--no-corrupt", action="store_true")
+    p.add_argument("--corrupt-val", action="store_true", help="also store corrupted validation logits")
+    p.add_argument("--corrupt-val-only", action="store_true", help="only compute corrupted validation logits")
+    p.add_argument("--out", help="output dir (default: --run)")
     p.add_argument("--no-latency", action="store_true")
     return p.parse_args()
 
@@ -35,6 +38,20 @@ def parse_args():
 def predict(model, x, y, transform=None):
     """Logits of every exit as a [K, N, C] float16 CPU tensor."""
     return torch.cat([torch.stack(model(xb)).half().cpu() for xb, _ in GPULoader(x, y, 500, transform=transform)], 1)
+
+
+def corrupt_sets(model, x, y, logit_dir, dev, prefix="", seed=0):
+    """Logits on every corruption and severity, saved as <prefix><name>_<s>.npy; returns per-exit accuracy."""
+    acc = {}
+    for ci, name in enumerate(CORRUPTIONS):
+        acc[name] = {}
+        for s in SEVERITIES:
+            g = torch.Generator(device=dev).manual_seed(seed + 1000 * ci + s)
+            logits = predict(model, x, y, transform=corrupt(name, s, g))
+            np.save(os.path.join(logit_dir, f"{prefix}{name}_{s}.npy"), logits.numpy())
+            acc[name][s] = per_exit_acc(logits, y.cpu())
+        print(prefix + name, json.dumps(acc[name]), flush=True)
+    return acc
 
 
 def per_exit_acc(logits, labels):
@@ -85,8 +102,15 @@ def main():
     model.to(dev)
 
     data = load_cifar100(args.data)
-    logit_dir = os.path.join(args.run, "logits")
+    out_dir = args.out or args.run
+    logit_dir = os.path.join(out_dir, "logits")
     os.makedirs(logit_dir, exist_ok=True)
+    if args.corrupt_val_only:
+        xv, yv = to_device(data["val"], dev)
+        acc = corrupt_sets(model, xv, yv, logit_dir, dev, prefix="val_", seed=50000)
+        with open(os.path.join(out_dir, "corrupt_val.json"), "w") as f:
+            json.dump(acc, f)
+        return
     splits = {}
     for split in ("val", "test"):
         x, y = to_device(data[split], dev)
@@ -104,16 +128,10 @@ def main():
     print(json.dumps({k: out[k] for k in ("acc", "temperature", "ece_test")}), flush=True)
 
     if not args.no_corrupt:
-        xt = splits["test"][0]
-        out["corrupt_acc"] = {}
-        for ci, name in enumerate(CORRUPTIONS):
-            out["corrupt_acc"][name] = {}
-            for s in SEVERITIES:
-                g = torch.Generator(device=dev).manual_seed(1000 * ci + s)
-                logits = predict(model, xt, splits["test"][1], transform=corrupt(name, s, g))
-                np.save(os.path.join(logit_dir, f"{name}_{s}.npy"), logits.numpy())
-                out["corrupt_acc"][name][s] = per_exit_acc(logits, yt)
-            print(name, json.dumps(out["corrupt_acc"][name]), flush=True)
+        out["corrupt_acc"] = corrupt_sets(model, splits["test"][0], splits["test"][1], logit_dir, dev)
+    if args.corrupt_val:
+        out["corrupt_val_acc"] = corrupt_sets(model, splits["val"][0], splits["val"][1], logit_dir, dev,
+                                              prefix="val_", seed=50000)
 
     if not args.no_latency:
         x, y = splits["test"][0], splits["test"][1]
@@ -130,9 +148,9 @@ def main():
         lat["cpu"]["device"] = f"{cpu_name()} ({args.cpu_threads} thread)"
         out["latency"] = lat
 
-    with open(os.path.join(args.run, "metrics.json"), "w") as f:
+    with open(os.path.join(out_dir, "metrics.json"), "w") as f:
         json.dump(out, f, indent=1)
-    print("saved", os.path.join(args.run, "metrics.json"), flush=True)
+    print("saved", os.path.join(out_dir, "metrics.json"), flush=True)
 
 
 if __name__ == "__main__":
