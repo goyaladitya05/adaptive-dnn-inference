@@ -388,8 +388,8 @@ def literature(R):
     R.h1("2. Literature Review")
     R.body(
         "We reviewed ten papers covering early-exit CNNs [1], [2], [4], [8], input-dependent routing [3], [6], "
-        "calibration [5], [10], corruption robustness [7] and early exiting in vision transformers [9]. Table 2 "
-        "summarises each paper; all quantitative results were checked against the original papers.")
+        f"calibration [5], [10], corruption robustness [7] and early exiting in vision transformers [9]. Table "
+        f"{R.tab_no + 1} summarises each paper; all quantitative results were checked against the original papers.")
     R.table(["#", "Paper", "Method", "Dataset(s)", "Key result", "Relevance to this project"],
             [list(r) for r in LIT], "Summary of reviewed literature.", widths=[1.0, 2.3, 3.4, 2.2, 4.0, 3.7], size=7.5)
     R.h2("2.1 Discussion")
@@ -427,7 +427,7 @@ def literature(R):
         "evaluates every exit policy under noise, blur and contrast corruptions.")
 
 
-def dataset(R):
+def dataset(R, final=False):
     R.h1("3. Dataset Acquisition and Preprocessing Pipeline")
     R.h2("3.1 Dataset")
     R.body(
@@ -435,7 +435,7 @@ def dataset(R):
         "training and 10,000 test images. It is downloaded programmatically through torchvision, so every run (local or "
         "on Kaggle) obtains identical data. We hold out a stratified validation set of 5,000 training images (50 per "
         "class, fixed seed 0) that is used for model selection, fitting temperatures and choosing exit thresholds. The "
-        "official test set is used only for reporting. Figure 1 shows random test samples.")
+        f"official test set is used only for reporting. Figure {R.fig_no + 1} shows random test samples.")
     R.figure("dataset_samples.png", "Random CIFAR-100 test images with their class labels.", width=15.5)
     R.table(["Split", "Images", "Per class", "Used for"], [
         ("Train", "45,000", "450", "Gradient updates"),
@@ -452,8 +452,10 @@ def dataset(R):
         "horizontal flips. Images are scaled to [0, 1] and normalised with the per-channel CIFAR-100 training mean "
         "(0.507, 0.487, 0.441) and standard deviation (0.267, 0.256, 0.276), which we verified on our training split. "
         "The ViT-Tiny additionally uses mixup [15] or CutMix [16] on every batch and label smoothing of 0.1, since "
-        "transformers trained from scratch on small datasets need stronger regularisation. Evaluation uses no "
-        "augmentation.")
+        "transformers trained from scratch on small datasets need stronger regularisation."
+        + (" For the final runs the ViT also uses RandAugment (two operations, magnitude 9), applied on the GPU to "
+           "chunks of 32 images that each draw their own operations." if final else "")
+        + " Evaluation uses no augmentation.")
     R.code(CODE_SPLIT)
     R.code(CODE_AUG)
     R.h2("3.3 Corrupted Test Sets")
@@ -464,7 +466,7 @@ def dataset(R):
         "constants of the original CIFAR-C generation code. Corrupted images are re-quantised to 8 bits, as in the "
         "stored benchmark, and every corruption and severity uses a fixed random seed, so all models see identical "
         "corrupted images. This gives 30 corrupted copies of the test set (300,000 images) without storing any extra "
-        "data. Figure 2 shows one test image under each corruption.")
+        f"data. Figure {R.fig_no + 1} shows one test image under each corruption.")
     R.figure("corruption_examples.png", "One test image under the six corruptions at severities 1, 3 and 5.", width=15)
     R.code(CODE_CORR)
 

@@ -1,8 +1,8 @@
 """Builds the interim report (Part B) as .docx from results/summary.json and figures, then converts to PDF."""
+import argparse
 import json
 import os
 import subprocess
-import sys
 
 from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -12,12 +12,11 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
 import content as C
+import final_content as FC
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-RESULTS = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "results", "interim")
-FIG = os.path.join(RESULTS, "figures")
-OUT = os.path.join(sys.argv[2] if len(sys.argv) > 2 else HERE, "Interim_Report.docx")
+FIG = None
 FONT = "Times New Roman"
 HEADER_FILL = "DCE6F2"
 
@@ -198,12 +197,12 @@ class Report:
         self.doc.save(path)
 
 
-def cover(R):
+def cover(R, kind):
     R.para("", after=30)
     for line in ("ADAPTIVE DEEP NEURAL NETWORK", "INFERENCE", "USING CONFIDENCE-BASED EARLY EXITS"):
         R.para(line, bold=True, size=18, align="center", after=0)
     R.para("", after=18)
-    for line in ("Interim Report on", "Deep Learning Project", "[ICT-4442]"):
+    for line in (f"{kind} Report on", "Deep Learning Project", "[ICT-4442]"):
         R.para(line, bold=True, size=12, align="center", after=2)
     R.para("", after=14)
     R.para("Submitted By", size=10.5, align="center", after=10)
@@ -224,15 +223,28 @@ def cover(R):
 
 
 def main():
-    with open(os.path.join(RESULTS, "summary.json")) as f:
+    global FIG
+    p = argparse.ArgumentParser()
+    p.add_argument("kind", choices=["interim", "final"])
+    p.add_argument("--results")
+    p.add_argument("--out", default=HERE)
+    args = p.parse_args()
+    results = args.results or os.path.join(ROOT, "results", args.kind)
+    FIG = os.path.join(results, "figures")
+    with open(os.path.join(results, "summary.json")) as f:
         S = json.load(f)
     R = Report()
-    cover(R)
-    C.write_body(R, S)
-    R.save(OUT)
-    subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", os.path.dirname(OUT), OUT], check=True,
+    if args.kind == "interim":
+        cover(R, "Interim")
+        C.write_body(R, S)
+    else:
+        cover(R, "Final Project")
+        FC.write_body(R, S)
+    out = os.path.join(args.out, f"{args.kind.capitalize()}_Report.docx")
+    R.save(out)
+    subprocess.run(["soffice", "--headless", "--convert-to", "pdf", "--outdir", args.out, out], check=True,
                    stdout=subprocess.DEVNULL)
-    print("wrote", OUT, "and", OUT.replace(".docx", ".pdf"))
+    print("wrote", out, "and", out.replace(".docx", ".pdf"))
 
 
 if __name__ == "__main__":
