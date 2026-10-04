@@ -193,12 +193,13 @@ def analyze_calibration(runs, out):
 
 
 def analyze_exits(summary, out):
-    fig, ax = plt.subplots(figsize=(6.4, 2.8))
     rows = []
     for name in ("ee_resnet18", "ee_vit_tiny"):
         if name in summary:
             for label, p in summary[name]["policies"].items():
-                rows.append((f"{NAMES[name]}\n{label}", p["test"]["exit_frac"]))
+                rows.append((f"{NAMES[name]}: {label}", p["test"]["exit_frac"]))
+    fig, ax = plt.subplots(figsize=(7.0, 0.36 * len(rows) + 1.0))
+    ax.set_axisbelow(True)
     for j, (lab, frac) in enumerate(rows):
         left = 0
         for i, f in enumerate(frac):
