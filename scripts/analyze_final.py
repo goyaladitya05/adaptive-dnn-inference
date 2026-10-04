@@ -23,7 +23,7 @@ from src.exits import (POLICIES, exit_scores, pick_threshold, reliability, route
                        sweep, tune_per_exit)
 
 SEVERITIES = ("1", "2", "3", "4", "5")
-TOL = 0.01
+TOL, TOL_RELAXED = 0.0, 0.01
 NAMES = {"resnet18": "ResNet-18 (full)", "ee_resnet18_kd": "EE-ResNet-18",
          "ee_resnet18_ce": "EE-ResNet-18, no distillation", "ee_resnet18_pool": "EE-ResNet-18, pooling heads",
          "ee_vit_tiny": "EE-ViT-Tiny"}
@@ -69,7 +69,7 @@ def subset_costs(seg, head, exits):
     return [sum(seg[:e + 1]) + sum(head[j] for j in exits if j <= e) for e in exits]
 
 
-def analyze_run(r, ref_cost):
+def analyze_run(r, ref_cost, match_acc):
     d, k = r["dir"], len(r["acc"]["test"])
     out = {"seed": r["seed"], "test_acc": r["acc"]["test"], "val_acc": r["acc"]["val"],
            "gflops": [c / 1e9 for c in r["flops"]["cumulative"]], "params": r["params"],
@@ -81,7 +81,8 @@ def analyze_run(r, ref_cost):
     lv, lt = load(d, "val"), load(d, "test")
     yv, yt = labels(d, "val"), labels(d, "test")
     cv, ct = lv.argmax(-1).numpy() == yv, lt.argmax(-1).numpy() == yt
-    target = out["val_acc"][-1] - TOL
+    target, relaxed = out["val_acc"][-1] - TOL, out["val_acc"][-1] - TOL_RELAXED
+    match_acc = match_acc if match_acc is not None else out["test_acc"][-1]
     budgets = [round(f * ref_cost, 4) for f in (0.35, 0.5, 0.65, 0.8)]
     out["budgets"] = budgets
     out["policies"], out["curves"] = {}, {}
@@ -93,6 +94,9 @@ def analyze_run(r, ref_cost):
                "acc_at": [max([x["acc"] for x in sw_t if x["cost"] <= b + 1e-9], default=float("nan")) for b in budgets]}
         th_k, _ = tune_per_exit(sv, cv, costs, target, th)
         res["per_exit"] = {"thresh": th_k, "test": routing_stats(route(st, th_k), ct, costs)}
+        th_r = pick_threshold(sw_v, relaxed)
+        res["relaxed"] = {"thresh": th_r, "test": routing_stats(route(st, th_r), ct, costs)}
+        res["match_cost"] = min([x["cost"] for x in sw_t if x["acc"] >= match_acc], default=None)
         out["policies"][label] = res
         out["curves"][label] = [(x["cost"], x["acc"]) for x in sw_t]
     first = np.where(ct.any(0), ct.argmax(0), k - 1)
@@ -255,7 +259,7 @@ def fig_thresholds(A, out):
                label="Per-exit thresholds")
         ax.set_xticks(x, names, fontsize=7.5)
         ax.set_ylabel("Mean GFLOPs at selected point")
-        ax.set_title(f"{NAMES[cfg]}: cost within 1 point of final exit", fontsize=9)
+        ax.set_title(f"{NAMES[cfg]}: cost at the validation-selected point", fontsize=9)
         ax.legend(fontsize=7)
     savefig(fig, out, "threshold_tuning.png")
 
@@ -376,14 +380,18 @@ def latency_rows(A):
             row = {"cfg": cfg, "device": dev, "device_name": lat[dev]["device"], "full_ms": lat[dev]["forced_ms"][-1],
                    "forced_ms": lat[dev]["forced_ms"]}
             for a in lat[dev]["adaptive"]:
-                if a["thresh"] == lat["ops"].get(a["label"]) and a["calibrated"] == ("TS" in a["label"]):
-                    row.setdefault("ops", {})[a["label"]] = a
+                key = {"strict": "ops", "relaxed": "ops_relaxed"}.get(a.get("point"))
+                if key:
+                    row.setdefault(key, {})[a["label"]] = a
             rows.append(row)
         if "gpu" in lat and "batched" in lat["gpu"]:
             b = lat["gpu"]["batched"]
-            rows.append({"cfg": cfg, "device": "gpu_batched", "full_tp": b["full"],
-                         "ops": {a["label"]: a for a in b["adaptive"] if a["thresh"] == lat["ops"].get(a["label"])
-                                 and a["calibrated"] == ("TS" in a["label"])}})
+            row = {"cfg": cfg, "device": "gpu_batched", "full_tp": b["full"]}
+            for a in b["adaptive"]:
+                key = {"strict": "ops", "relaxed": "ops_relaxed"}.get(a.get("point"))
+                if key:
+                    row.setdefault(key, {})[a["label"]] = a
+            rows.append(row)
     return rows
 
 
@@ -446,10 +454,12 @@ def main():
     runs = discover(args.runs)
     print({k: [r["seed"] for r in v] for k, v in runs.items()}, flush=True)
     base_cost = runs["resnet18"][0]["flops"]["cumulative"][0] / 1e9
+    base_acc = float(np.mean([r["acc"]["test"][0] for r in runs["resnet18"]]))
     A = {}
     for cfg, rs in runs.items():
-        ref = rs[0]["flops"]["cumulative"][-1] / 1e9 if cfg == "ee_vit_tiny" else base_cost
-        seeds = [analyze_run(r, ref) for r in rs]
+        vit = cfg == "ee_vit_tiny"
+        ref = rs[0]["flops"]["cumulative"][-1] / 1e9 if vit else base_cost
+        seeds = [analyze_run(r, ref, None if vit else base_acc) for r in rs]
         A[cfg] = {"raw": rs, "seeds": seeds, "mean": aggregate(seeds), "n": len(seeds)}
         print("analyzed", cfg, flush=True)
     lat = latency_rows(A)

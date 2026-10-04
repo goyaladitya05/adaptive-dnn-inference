@@ -41,7 +41,7 @@ def tune_per_exit(scores, correct, costs, target, init, grid=THRESH, passes=3):
 def pm(v, scale=100, d=2):
     """mean +- std from a [mean, std] pair."""
     m, s = v
-    return f"{scale * m:.{d}f} +- {scale * s:.{d}f}" if s > 0 else f"{scale * m:.{d}f}"
+    return f"{scale * m:.{d}f} ± {scale * s:.{d}f}" if s > 0 else f"{scale * m:.{d}f}"
 
 
 def mean(v, scale=100, d=1):
@@ -84,183 +84,220 @@ def narrative(S):
     if not (base and ee):
         return T
     bacc, bc = base["test_acc"][0], base["gflops"][0][0]
-    a = ee["test_acc"]
-    mp, mpe = ee["policies"]["Max-prob"]["test"], ee["policies"]["Max-prob"]["per_exit"]["test"]
-    et = ee["policies"]["Entropy + TS"]["test"]
-    best_cost, best_label, best = _best(ee)
-    sav, sav_best = 1 - mp["cost"][0] / bc, 1 - best_cost / bc
+    a, g = ee["test_acc"], ee["gflops"]
+    P = ee["policies"]
+    mp, mpe, mpr = P["Max-prob"]["test"], P["Max-prob"]["per_exit"]["test"], P["Max-prob"]["relaxed"]["test"]
+    mpt, et, ete = P["Max-prob + TS"]["test"], P["Entropy + TS"]["test"], P["Entropy + TS"]["per_exit"]["test"]
+    match = P["Max-prob"]["match_cost"][0]
+    sav = lambda c: 100 * (1 - c / bc)  # noqa: E731
     er, ec, temps = ee["ece_test"]["raw"], ee["ece_test"]["calibrated"], ee["temperature"]
     o, ot = ee["oracle"], ee["overthinking"]
-    g, c1, c4 = (_lat(S, "resnet18", d) for d in ("gpu", "cpu1", "cpu4"))
+    gl, c1, c4 = (_lat(S, "resnet18", d) for d in ("gpu", "cpu1", "cpu4"))
     eg, e1, e4 = (_lat(S, "ee_resnet18_kd", d) for d in ("gpu", "cpu1", "cpu4"))
     bt, ebt = _lat(S, "resnet18", "gpu_batched"), _lat(S, "ee_resnet18_kd", "gpu_batched")
-    has_lat = all(x and "Max-prob" in x.get("ops", {}) for x in (eg, e1, e4)) and all((g, c1, c4))
+    has_lat = all(x and "Max-prob" in x.get("ops", {}) for x in (eg, e1, e4)) and all((gl, c1, c4))
+    sp, tp = {}, None
     if has_lat:
-        sp = {d: b["full_ms"] / e["ops"]["Max-prob"]["ms"] for d, b, e in (("gpu", g, eg), ("cpu1", c1, e1), ("cpu4", c4, e4))}
-        tp = ebt["ops"]["Max-prob"]["img_per_s"] / bt["full_tp"] if bt and ebt and "Max-prob" in ebt.get("ops", {}) else None
-    acc5 = {k: _corr(ee, k, "5", "acc") for k in ("Max-prob", "Entropy + TS")}
-    cost5 = {k: _corr(ee, k, "5", "cost") for k in ("Max-prob", "Entropy + TS")}
-    ef5 = {k: _corr(ee, k, "5", "early_frac") for k in ("Max-prob", "Entropy + TS")}
-    ea5 = {k: _corr(ee, k, "5", "early_acc") for k in ("Max-prob", "Entropy + TS")}
-    worst = max(((c, sv) for c in C.CORRUPTIONS for sv in ("4", "5")),
-                key=lambda cs: ee["corrupt"][cs[0]][cs[1]]["Max-prob"]["early_frac"][0]
-                * (1 - (ee["corrupt"][cs[0]][cs[1]]["Max-prob"]["early_acc"][0] or 0)))
-    wm = ee["corrupt"][worst[0]][worst[1]]["Max-prob"]
-    ece5 = [sum(ee["corrupt_ece"][c]["5"][key][-1][0] for c in C.CORRUPTIONS) / 6 for key in ("raw", "calibrated")]
+        sp = {d: b["full_ms"] / e["ops"]["Max-prob"]["ms"] for d, b, e in (("gpu", gl, eg), ("cpu1", c1, e1), ("cpu4", c4, e4))}
+        if bt and ebt and "Max-prob" in ebt.get("ops", {}):
+            tp = ebt["ops"]["Max-prob"]["img_per_s"] / bt["full_tp"]
+    base_c = {sv: _base_corr(base, sv) for sv in ("1", "3", "5")}
+    R = {(lab, k, sv): _corr(ee, lab, sv, k) for lab in ("Max-prob", "Entropy + TS")
+         for k in ("acc", "cost", "early_frac", "early_acc") for sv in ("1", "3", "5")}
+    gn = ee["corrupt"]["gaussian_noise"]["5"]["Max-prob"]
+    ece_f = {sv: [sum(ee["corrupt_ece"][c][sv][key][-1][0] for c in C.CORRUPTIONS) / 6 for key in ("raw", "calibrated")]
+             for sv in ("1", "5")}
 
     T["abstract"] = (
-        "Early-exit networks attach classifiers at several depths of a backbone so that easy inputs can stop early. "
-        "We study confidence-based early exiting on CIFAR-100 with four models: a ResNet-18 baseline, a confidence-based "
-        "early-exit ResNet-18, a calibrated and entropy-based variant of the same network, and an early-exit ViT-Tiny, "
-        "trained with self-distillation over three seeds. With a threshold chosen on validation data, the early-exit "
-        f"ResNet-18 matches the accuracy of the full network ({pm(mp['acc'])}% against {pm(bacc)}%) while using "
-        f"{100 * sav:.0f}% fewer FLOPs, and per-exit thresholds raise the saving to {100 * sav_best:.0f}%. "
-        + (f"These savings become measured speed-ups on a CPU ({sp['cpu1']:.2f}x with one thread) but not for single "
-           f"images on a T4 GPU ({sp['gpu']:.2f}x), where per-exit synchronisation dominates. " if has_lat else "")
-        + f"Temperature scaling reduces the calibration error of every exit to at most {100 * max(v[0] for v in ec):.1f}% "
-        "but does not make routing on clean data cheaper. Under corruptions, the raw confidence rule keeps exiting "
-        f"images early that are mostly misclassified (at severity 5, only {100 * ea5['Max-prob']:.0f}% of early exits "
-        f"are correct), while the calibrated entropy rule exits fewer images early and is right on "
-        f"{100 * ea5['Entropy + TS']:.0f}% of them. Confidence-based early exits therefore save substantial computation, "
-        "but their routing decisions need calibration and shift-aware thresholds to remain dependable.")
+        "Early-exit networks attach classifiers at several depths of a backbone so that easy inputs can stop early. We "
+        "study confidence-based early exiting on CIFAR-100 with a ResNet-18 baseline, a confidence-based early-exit "
+        "ResNet-18, a calibrated and entropy-based variant of the same network, and an early-exit ViT-Tiny, trained with "
+        "self-distillation and averaged over three seeds. With thresholds chosen on validation so that no accuracy is "
+        f"lost relative to its own final exit, the early-exit ResNet-18 reaches {pm(mp['acc'])}% (ResNet-18: "
+        f"{pm(bacc)}%) with {sav(mp['cost'][0]):.0f}% fewer FLOPs, and per-exit thresholds raise the saving to "
+        f"{sav(mpe['cost'][0]):.0f}%. "
+        + (f"The savings become measured speed-ups on a CPU ({sp['cpu1']:.2f}x with one thread) but not for single images "
+           f"on a T4 GPU ({sp['gpu']:.2f}x), where per-exit synchronisation dominates. " if has_lat else "")
+        + f"Temperature scaling lowers the calibration error of every exit from {100 * min(v[0] for v in er):.0f}-"
+        f"{100 * max(v[0] for v in er):.0f}% to at most {100 * max(v[0] for v in ec):.1f}% but makes routing on clean data "
+        "more expensive. Under corruption the self-distilled CNN exits stay overconfident: at severity 5, "
+        f"{100 * R['Max-prob', 'early_frac', '5']:.0f}% of images still exit early and only "
+        f"{100 * R['Max-prob', 'early_acc', '5']:.0f}% of those decisions are correct. Calibrated entropy halves the early "
+        "exits and makes them more accurate, and the underconfident ViT exits become cautious on their own. Early exits "
+        "thus save substantial computation, but reliable routing under distribution shift needs calibration that holds "
+        "beyond the clean data.")
 
     T["training"] = (
-        "All runs converged smoothly within 200 epochs. The early exits of EE-ResNet-18 track the final "
-        "exit closely during training, and the ViT exits after six or more blocks are almost indistinguishable, a first "
-        "sign that much of the network is redundant for many images.")
+        "All runs converged within 200 epochs. In EE-ResNet-18 the deep exits track the final exit closely during "
+        "training, and in the ViT the exits after six or more blocks are almost indistinguishable, a first sign that much "
+        "of each network is redundant for many images. The pooling-head variant learns visibly weaker early exits.")
 
     T["accuracy"] = (
-        f"The ResNet-18 baseline reaches {pm(bacc)}%. The final exit of the self-distilled EE-ResNet-18 reaches "
-        f"{pm(a[-1])}% ({100 * (a[-1][0] - bacc[0]):+.2f} points), so attaching and training the early exits does not "
-        f"harm the full network. Exit 1, after the first residual stage and at {100 * ee['gflops'][0][0] / bc:.0f}% of "
-        f"the baseline cost, already reaches {pm(a[0])}%, and exit 3 is within "
-        f"{100 * (bacc[0] - a[2][0]):.1f} points of the baseline."
-        + (f" EE-ViT-Tiny reaches {pm(vt['test_acc'][-1])}% at its final exit, still behind the CNN despite the longer "
-           f"schedule, RandAugment and distillation, which is typical for a transformer trained from scratch on "
-           f"32x32 images [13], [14]." if vt else ""))
+        f"ResNet-18 reaches {pm(bacc)}%. The final exit of the self-distilled EE-ResNet-18 reaches {pm(a[-1])}%, the "
+        f"same within one standard deviation, so the early exits do not harm the full network. Exit 1, after the first "
+        f"residual stage at {100 * g[0][0] / bc:.0f}% of the baseline cost, reaches {pm(a[0])}%, and exit 3 "
+        f"({100 * g[2][0] / bc:.0f}% of the cost) already matches the baseline ({pm(a[2])}%)."
+        + (f" EE-ViT-Tiny reaches {pm(vt['test_acc'][-1])}% at its final exit, about five points more than in the interim "
+           f"study thanks to the longer schedule, RandAugment and distillation, but still below the CNN, as is typical for "
+           f"a transformer trained from scratch on 32x32 images [13], [14]. Its exit 2, after six of twelve blocks, is "
+           f"within {100 * (vt['test_acc'][-1][0] - vt['test_acc'][1][0]):.1f} points of the final exit." if vt else ""))
 
     T["tradeoff"] = (
-        f"With one global threshold chosen on validation, max-prob exiting (Model 2) reaches {pm(mp['acc'])}% with "
-        f"{pm(mp['cost'], 1, 3)} GFLOPs, a {100 * sav:.1f}% reduction relative to ResNet-18 at equal accuracy; "
-        f"{mean(mp['exit_frac'][0], d=0)}% of test images leave at the first exit and only "
-        f"{mean(mp['exit_frac'][-1], d=0)}% use the whole network. The cheapest point overall is {best_label} with "
-        f"{best_cost:.3f} GFLOPs at {100 * best['acc'][0]:.2f}% ({100 * sav_best:.1f}% fewer FLOPs). Among global "
-        f"thresholds, the calibrated rules (Model 3) are not cheaper than raw max-prob on clean data: entropy with "
-        f"temperature scaling needs {pm(et['cost'], 1, 3)} GFLOPs for {pm(et['acc'])}%. Temperature scaling softens the "
-        f"overconfident deeper exits, so fewer images stop there."
-        + (f" For EE-ViT-Tiny, max-prob stays within one point of its final exit with "
-           f"{100 * (1 - vt['policies']['Max-prob']['test']['cost'][0] / vt['gflops'][-1][0]):.0f}% fewer FLOPs." if vt else ""))
+        f"At the main operating point (no accuracy loss on validation) max-prob exiting reaches {pm(mp['acc'])}% with "
+        f"{pm(mp['cost'], 1, 3)} GFLOPs, {sav(mp['cost'][0]):.1f}% fewer than ResNet-18; {mean(mp['exit_frac'][0], d=0)}% "
+        f"of test images leave at the first exit and only {mean(mp['exit_frac'][-1], d=0)}% need the full network. On "
+        f"test this point is {100 * (a[-1][0] - mp['acc'][0]):.1f} points below the model's own final exit (and "
+        f"{100 * (bacc[0] - mp['acc'][0]):.1f} below ResNet-18): a threshold that loses nothing on 5,000 validation "
+        f"images loses a little on the test set, a sign of the noise in threshold selection. Allowing one point on "
+        f"validation lowers the cost to "
+        f"{mpr['cost'][0]:.3f} GFLOPs ({sav(mpr['cost'][0]):.0f}% fewer) at {pm(mpr['acc'])}%, and fully matching the "
+        f"baseline's test accuracy needs {match:.3f} GFLOPs ({sav(match):.0f}% fewer, an optimistic figure since that "
+        f"threshold is chosen on test). The calibrated rules (Model 3) are more conservative on clean data: max-prob with "
+        f"temperature scaling needs {mpt['cost'][0]:.3f} GFLOPs and entropy with temperature scaling "
+        f"{et['cost'][0]:.3f} GFLOPs, for slightly higher accuracy ({pm(mpt['acc'])}% and {pm(et['acc'])}%), because "
+        f"scaling softens the overconfident exits so that fewer images stop early.")
+    if vt:
+        vp, vpt = vt["policies"]["Max-prob"], vt["policies"]["Max-prob + TS"]
+        vc = vt["gflops"][-1][0]
+        T["tradeoff"] += (
+            f"\nFor EE-ViT-Tiny the picture is reversed: its exits are underconfident, temperature scaling sharpens them, "
+            f"and max-prob with scaling is the cheapest global rule ({vpt['test']['cost'][0]:.3f} GFLOPs, "
+            f"{100 * (1 - vpt['test']['cost'][0] / vc):.0f}% fewer than the full ViT, against "
+            f"{100 * (1 - vp['test']['cost'][0] / vc):.0f}% for raw max-prob).")
 
     T["thresholds"] = (
-        f"Per-exit thresholds, tuned on validation by coordinate descent, lower the cost of every rule at the same "
-        f"accuracy constraint: for max-prob from {pm(mp['cost'], 1, 3)} to {pm(mpe['cost'], 1, 3)} GFLOPs at "
-        f"{pm(mpe['acc'])}% accuracy. A single global threshold implicitly assumes that a given confidence means the same "
-        f"at every exit; per-exit thresholds remove that assumption directly for the cost objective, which is what "
-        f"temperature scaling alone does not do.")
+        f"Per-exit thresholds lower the cost of every rule under the same validation constraint: for max-prob from "
+        f"{mp['cost'][0]:.3f} to {mpe['cost'][0]:.3f} GFLOPs, and for entropy with temperature scaling from "
+        f"{et['cost'][0]:.3f} to {ete['cost'][0]:.3f} GFLOPs"
+        + (f"; for the ViT with temperature scaling from {vt['policies']['Max-prob + TS']['test']['cost'][0]:.3f} to "
+           f"{vt['policies']['Max-prob + TS']['per_exit']['test']['cost'][0]:.3f} GFLOPs" if vt else "")
+        + ". A global threshold assumes that a given confidence means the same at every exit; per-exit thresholds drop "
+        "that assumption and optimise the cost directly, which temperature scaling alone does not do.")
 
     abl = []
     if ce:
+        cmp = ce["policies"]["Max-prob"]["test"]
         abl.append(
-            f"Removing self-distillation changes exit 1 from {pm(a[0])}% to {pm(ce['test_acc'][0])}% and the final exit "
-            f"from {pm(a[-1])}% to {pm(ce['test_acc'][-1])}%; max-prob then needs "
-            f"{ce['policies']['Max-prob']['test']['cost'][0]:.3f} instead of {mp['cost'][0]:.3f} GFLOPs.")
+            f"Self-distillation raises exit 1 from {pm(ce['test_acc'][0])}% to {pm(a[0])}% while the final exit changes "
+            f"from {pm(ce['test_acc'][-1])}% to {pm(a[-1])}%, and it lowers the max-prob cost at the main operating point "
+            f"from {cmp['cost'][0]:.3f} to {mp['cost'][0]:.3f} GFLOPs ({100 * (1 - mp['cost'][0] / cmp['cost'][0]):.0f}% "
+            f"less). As Section 6.8 shows, this comes at a price under corruption.")
     if pool:
+        pmp = pool["policies"]["Max-prob"]["test"]
         abl.append(
-            f"With pooling-only heads, the full path costs {pool['gflops'][-1][0]:.3f} GFLOPs instead of "
-            f"{ee['gflops'][-1][0]:.3f}, but exit 1 drops to {pm(pool['test_acc'][0])}% and max-prob needs "
-            f"{pool['policies']['Max-prob']['test']['cost'][0]:.3f} GFLOPs for its operating point, so cheap heads save "
-            f"less overall than heads that can process their features.")
-    sub = sorted(ee["subsets"].items(), key=lambda kv: kv[1]["cost"][0])
+            f"Pooling-only heads are cheaper (full path {pool['gflops'][-1][0]:.3f} instead of {g[-1][0]:.3f} GFLOPs) but "
+            f"exit 1 drops to {pm(pool['test_acc'][0])}% and even the final exit falls to {pm(pool['test_acc'][-1])}%: "
+            f"forcing linearly separable features after the first stages hurts the shared backbone. Its main operating "
+            f"point needs {pmp['cost'][0]:.3f} GFLOPs for {pm(pmp['acc'])}%, so heads that can process their features are "
+            f"clearly worth their cost.")
+    sub = ee["subsets"]
     abl.append(
-        f"Among exit subsets, the cheapest is {sub[0][0]} ({sub[0][1]['cost'][0]:.3f} GFLOPs at "
-        f"{100 * sub[0][1]['acc'][0]:.2f}%); the first exit contributes most of the savings, and later exits mainly "
-        f"refine images that the first exit rejects.")
+        f"Using all four exits is the cheapest configuration ({sub['E1+E2+E3+E4']['cost'][0]:.3f} GFLOPs). Dropping exit 1 "
+        f"raises the cost to {sub['E2+E3+E4']['cost'][0]:.3f} GFLOPs, while keeping only exit 1 and the final exit costs "
+        f"{sub['E1+E4']['cost'][0]:.3f} GFLOPs: the first exit provides most of the savings and the intermediate exits "
+        f"catch images that are nearly but not quite confident at exit 1.")
     T["ablation"] = " ".join(abl)
 
+    ce_e1 = f", {100 * ce['ece_test']['raw'][0][0]:.1f}% without distillation" if ce else ""
     T["calibration"] = (
-        f"As in the interim study, raw ECE grows with depth for the CNN, from {100 * er[0][0]:.1f}% at exit 1 to "
-        f"{100 * er[-1][0]:.1f}% at the final exit, and the fitted temperatures rise from {temps[0][0]:.2f} to "
-        f"{temps[-1][0]:.2f}. Temperature scaling brings every exit to between {100 * min(v[0] for v in ec):.1f}% and "
+        f"Every exit of the self-distilled CNN is overconfident: raw ECE ranges from {100 * min(v[0] for v in er):.1f}% to "
+        f"{100 * max(v[0] for v in er):.1f}%, with temperatures between {min(t[0] for t in temps):.2f} and "
+        f"{max(t[0] for t in temps):.2f}. Training longer and distilling made even exit 1 overconfident (2.6% ECE in the "
+        f"80-epoch interim model{ce_e1}). "
+        f"Temperature scaling brings every exit to between {100 * min(v[0] for v in ec):.1f}% and "
         f"{100 * max(v[0] for v in ec):.1f}%."
-        + (f" The ViT exits, trained with label smoothing and mixup, are underconfident (temperatures "
-           f"{min(t[0] for t in vt['temperature']):.2f} to {max(t[0] for t in vt['temperature']):.2f}); scaling sharpens "
-           f"them and reduces their ECE to at most {100 * max(v[0] for v in vt['ece_test']['calibrated']):.1f}%." if vt else ""))
+        + (f" The ViT exits are underconfident (temperatures {min(t[0] for t in vt['temperature']):.2f} to "
+           f"{max(t[0] for t in vt['temperature']):.2f}), most of all the shallow ones; scaling sharpens them and reduces "
+           f"their ECE to at most {100 * max(v[0] for v in vt['ece_test']['calibrated']):.1f}%." if vt else ""))
 
     T["overthinking"] = (
         f"An oracle that stops each image at its earliest correct exit would reach {pm(o['acc'])}% with only "
-        f"{pm(o['cost'], 1, 3)} GFLOPs. On {pm(ot['destructive'])}% of test images some early exit is correct while the "
-        f"final exit is wrong, so deeper processing sometimes destroys a correct answer, the overthinking effect of [4]. "
-        f"The gap between the oracle and every practical rule shows that the main limitation is deciding when to stop, "
-        f"not the quality of the early classifiers.")
+        f"{pm(o['cost'], 1, 3)} GFLOPs. On {pm(ot['destructive'])}% of test images an early exit is correct while the final "
+        f"exit is wrong, so deeper processing sometimes destroys a correct answer, the overthinking effect of [4]. The gap "
+        f"between the oracle and every practical rule shows that deciding when to stop, not the quality of the early "
+        f"classifiers, is the main limitation.")
 
     if has_lat:
         T["latency"] = (
             f"On one CPU thread, ResNet-18 takes {c1['full_ms']:.1f} ms per image and EE-ResNet-18 with max-prob "
-            f"{e1['ops']['Max-prob']['ms']:.1f} ms, a {sp['cpu1']:.2f}x speed-up; with four threads the speed-up is "
-            f"{sp['cpu4']:.2f}x. On the T4 at batch 1, the baseline takes {g['full_ms']:.2f} ms and the early-exit model "
-            f"{eg['ops']['Max-prob']['ms']:.2f} ms ({sp['gpu']:.2f}x): small kernels and a GPU-to-CPU synchronisation "
-            f"after every exit dominate, so FLOP savings do not appear. "
-            + (f"With batches of 256 and exited images removed from the batch, throughput improves by {tp:.2f}x. " if tp else "")
-            + "Early exits therefore pay off for CPU and edge inference and for batched serving.")
+            f"{e1['ops']['Max-prob']['ms']:.1f} ms, a {sp['cpu1']:.2f}x speed-up; with four threads it is {sp['cpu4']:.2f}x. "
+            f"On the T4 at batch 1, the baseline takes {gl['full_ms']:.2f} ms and the early-exit model "
+            f"{eg['ops']['Max-prob']['ms']:.2f} ms ({sp['gpu']:.2f}x): small kernels and a GPU-to-CPU synchronisation after "
+            f"every exit dominate, so the FLOP savings do not appear. "
+            + (f"With batches of 256 and exited images removed from the batch, GPU throughput changes by {tp:.2f}x. " if tp else "")
+            + "Early exits therefore pay off for CPU and edge inference, while on GPUs they need batching or kernels "
+            "that avoid per-exit synchronisation.")
 
     T["robustness"] = (
-        f"With thresholds frozen from clean validation data, the early-exit model keeps the accuracy of the full "
-        f"network under corruption: averaged over the six corruptions at severity 5, ResNet-18 reaches "
-        f"{100 * _base_corr(base, '5'):.1f}%, max-prob {100 * acc5['Max-prob']:.1f}% and entropy with temperature scaling "
-        f"{100 * acc5['Entropy + TS']:.1f}%. The model spends more computation on corrupted images "
-        f"({mp['cost'][0]:.2f} GFLOPs clean, {cost5['Max-prob']:.2f} at severity 5 with max-prob), and the exit "
-        f"distribution moves towards the final exit. The quality of the early decisions, however, differs sharply: at "
-        f"severity 5 the raw max-prob rule still exits {100 * ef5['Max-prob']:.0f}% of images early and only "
-        f"{100 * ea5['Max-prob']:.0f}% of them are correct, while entropy with temperature scaling exits "
-        f"{100 * ef5['Entropy + TS']:.0f}% early with {100 * ea5['Entropy + TS']:.0f}% correct, at {cost5['Entropy + TS']:.2f} "
-        f"GFLOPs. The worst case is {C.CORR_NAMES[worst[0]].lower()} at severity {worst[1]}, where max-prob exits "
-        f"{100 * wm['early_frac'][0]:.0f}% of images early with {100 * (wm['early_acc'][0] or 0):.0f}% accuracy. Calibration "
-        f"fitted on clean data transfers only partly: at severity 5 the final exit's ECE is {100 * ece5[0]:.1f}% raw and "
-        f"{100 * ece5[1]:.1f}% after scaling.")
+        f"With thresholds frozen from clean validation data, max-prob exiting loses accuracy relative to ResNet-18 on "
+        f"mildly corrupted inputs ({100 * R['Max-prob', 'acc', '1']:.1f}% against {100 * base_c['1']:.1f}% at severity 1, "
+        f"a larger gap than on clean data) and converges to it at high severity ({100 * R['Max-prob', 'acc', '5']:.1f}% "
+        f"against {100 * base_c['5']:.1f}%). Its computation rises only slowly, from {mp['cost'][0]:.2f} GFLOPs on clean "
+        f"data to {R['Max-prob', 'cost', '5']:.2f} at severity 5, because the overconfident exits keep stopping images: "
+        f"{100 * R['Max-prob', 'early_frac', '1']:.0f}%, {100 * R['Max-prob', 'early_frac', '3']:.0f}% and "
+        f"{100 * R['Max-prob', 'early_frac', '5']:.0f}% of images exit early at severities 1, 3 and 5, and only "
+        f"{100 * R['Max-prob', 'early_acc', '5']:.0f}% of those at severity 5 are correct. Under Gaussian noise at severity "
+        f"5, {100 * gn['early_frac'][0]:.0f}% of images exit early with {100 * gn['early_acc'][0]:.0f}% accuracy. Entropy "
+        f"with temperature scaling is markedly more cautious: {100 * R['Entropy + TS', 'early_frac', '5']:.0f}% exit early "
+        f"at severity 5, {100 * R['Entropy + TS', 'early_acc', '5']:.0f}% of them correctly, it spends "
+        f"{R['Entropy + TS', 'cost', '5']:.2f} GFLOPs and is at least as accurate as max-prob at every severity. "
+        + (f"Self-distillation amplifies the problem: the model trained without it exits "
+           f"{100 * _corr(ce, 'Max-prob', '5', 'early_frac'):.0f}% of images early at severity 5 with "
+           f"{100 * _corr(ce, 'Max-prob', '5', 'early_acc'):.0f}% accuracy. " if ce else "")
+        + (f"The ViT behaves very differently. Although less accurate on clean data, it is more robust "
+           f"({100 * _corr(vt, 'Max-prob', '3', 'acc'):.1f}% against {100 * base_c['3']:.1f}% for ResNet-18 at severity 3), "
+           f"and its underconfident exits become cautious by themselves: the share exiting early falls to "
+           f"{100 * _corr(vt, 'Max-prob', '5', 'early_frac'):.0f}% at severity 5, and "
+           f"{100 * _corr(vt, 'Max-prob', '5', 'early_acc'):.0f}% of those are correct. " if vt else "")
+        + f"Temperatures fitted on clean data do not transfer: the final exit's ECE is {100 * ece_f['1'][1]:.1f}% after "
+        f"scaling at severity 1 and {100 * ece_f['5'][1]:.1f}% at severity 5 (raw: {100 * ece_f['1'][0]:.1f}% and "
+        f"{100 * ece_f['5'][0]:.1f}%).")
 
     T["obj1"] = (
-        f"The early-exit networks select their depth per image: on clean data about "
-        f"{mean(mp['exit_frac'][0], d=0)}% of images stop at the first exit, and under corruption the share reaching the "
-        f"final exit rises, so harder inputs automatically receive more computation. The same mechanism works for the "
-        f"ViT, where half of the blocks suffice for most images.")
+        f"The early-exit networks choose their depth per image: on clean data {mean(mp['exit_frac'][0], d=0)}% of images "
+        f"stop at the first exit of EE-ResNet-18 and only {mean(mp['exit_frac'][-1], d=0)}% use the whole network. Under "
+        f"corruption more images continue, but far fewer than the drop in accuracy would justify for the overconfident "
+        f"CNN, whereas the ViT shifts most images to deeper exits.")
     T["obj2"] = (
-        f"At equal accuracy the early-exit ResNet-18 uses {100 * sav:.0f}% fewer FLOPs with one threshold and "
-        f"{100 * sav_best:.0f}% fewer with per-exit thresholds. "
-        + (f"Measured latency follows FLOPs on CPUs ({sp['cpu1']:.2f}x with one thread) but not on a GPU at batch 1 "
+        f"With no accuracy loss on validation, the early-exit ResNet-18 uses {sav(mp['cost'][0]):.0f}% fewer FLOPs than "
+        f"ResNet-18 ({sav(mpe['cost'][0]):.0f}% with per-exit thresholds) at {pm(mp['acc'])}% against {pm(bacc)}%. "
+        + (f"Measured latency follows FLOPs on a CPU ({sp['cpu1']:.2f}x with one thread) but not on a GPU at batch 1 "
            f"({sp['gpu']:.2f}x), so FLOP counts alone are not a reliable proxy for speed." if has_lat else ""))
     T["obj3"] = (
-        "Confidence-based exits keep the accuracy of the full network under corruption, but raw confidence is "
-        "overconfident under shift and lets many wrong predictions out early. Calibrated entropy makes early decisions "
-        "much more reliable at the cost of extra computation, and temperatures fitted on clean data only partly "
-        "transfer to corrupted inputs.")
+        "Raw confidence is a poor routing signal under distribution shift: the self-distilled exits keep stopping "
+        "corrupted images that they misclassify, and temperatures fitted on clean data only partly correct this. "
+        "Calibrated entropy makes early decisions clearly more reliable at the cost of extra computation, removing "
+        "distillation helps, and the underconfident ViT exits are the most dependable.")
     T["literature"] = (
-        "Our savings are in line with SDN [4], which reported more than 50% fewer FLOPs at equal accuracy on CIFAR-100, "
-        "and our CPU speed-ups resemble the measured speed-ups of BranchyNet [1]. The lack of GPU speed-up at batch 1 "
-        "echoes BlockDrop's observation that sequential decisions can cost more than they save [6]. Like Meronen et al. "
-        "[10], we find early exits miscalibrated; unlike their setting, calibrating each exit did not reduce the cost "
-        "of a single-threshold rule on clean data, which we attribute to the threshold being shared across exits. The "
-        "behaviour of exit decisions under corruption, which none of the reviewed early-exit methods evaluates [7], is "
-        "where calibration mattered most.")
+        "Our savings are in line with SDN [4], which reported more than 50% fewer FLOPs at equal accuracy on "
+        "CIFAR-100, and our CPU speed-ups resemble the measured speed-ups of BranchyNet [1]. The missing GPU speed-up at "
+        "batch 1 echoes BlockDrop's observation that sequential decisions can cost more than they save [6]. Like Meronen "
+        "et al. [10] we find early exits miscalibrated; calibration improved routing for the underconfident ViT but not "
+        "for the overconfident CNN on clean data, which we attribute to the threshold being shared across exits. "
+        "Self-distillation, used by LGViT [9] to strengthen early exits, improved efficiency here but made the exits "
+        "overconfident under corruption, an effect that the reviewed early-exit methods do not evaluate [7].")
     T["limitations"] = (
-        "All experiments use CIFAR-100 at 32x32 resolution and one CNN and one transformer; results on larger images "
-        "and other architectures may differ. The corruptions are a GPU re-implementation of 6 of the 19 CIFAR-100-C "
-        "types. Latency was measured on shared cloud machines (one T4 and a virtual CPU), averaged over many images "
-        "but not over sessions. The ViT is trained from scratch and remains weaker than the CNN, and ablations use a "
-        "single seed.")
+        "All experiments use CIFAR-100 at 32x32 resolution with one CNN and one transformer; larger images and other "
+        "architectures may behave differently. The corruptions re-implement 6 of the 19 CIFAR-100-C types. Latency was "
+        "measured on shared cloud machines (one T4 and a virtual CPU), averaged over many images but within one session. "
+        "The ViT is trained from scratch and remains weaker than the CNN, the ablations use a single seed, and the "
+        "5,000-image validation set makes threshold selection somewhat noisy, as the gap between validation and test "
+        "accuracy shows.")
     T["conclusion"] = (
-        f"Confidence-based early exits are an effective way to adapt computation to input difficulty: on CIFAR-100 an "
-        f"early-exit ResNet-18 matches the full network with {100 * sav:.0f}-{100 * sav_best:.0f}% fewer FLOPs, and "
-        f"self-distillation and processing heads make the early exits strong enough for most images to stop at the "
-        f"first exit. The savings are real on CPUs but need batching to appear on GPUs. Calibration fixes the "
-        f"probability estimates of every exit, but routing efficiency and routing reliability are different goals: "
-        f"per-exit thresholds serve the first, while calibrated entropy serves the second under distribution shift.")
+        f"Confidence-based early exits adapt computation to input difficulty: on CIFAR-100 an early-exit ResNet-18 keeps "
+        f"the accuracy of its own final exit on validation with {sav(mp['cost'][0]):.0f}-{sav(mpe['cost'][0]):.0f}% fewer "
+        f"FLOPs than ResNet-18, and self-distillation with processing heads lets most images stop at the first exit. The "
+        f"savings are real on CPUs but need batching to appear on GPUs. Calibration fixes the probability estimates of "
+        f"each exit, but routing efficiency and routing reliability are different goals: per-exit thresholds and "
+        f"distillation serve the first, while calibrated entropy and less overconfident exits serve the second, which "
+        f"matters most when the inputs drift away from the training distribution.")
     T["future"] = [
-        "Exit rules that remain reliable under distribution shift, for example corruption-aware calibration or "
-        "thresholds that adapt to the input distribution.",
+        "Exit rules and calibration that remain reliable under distribution shift, for example corruption-aware or "
+        "test-time calibration, or thresholds that adapt to the input distribution.",
+        "Distillation objectives that strengthen early exits without making them overconfident.",
         "Reducing per-exit synchronisation on GPUs (batched exit decisions, fused kernels or CUDA graphs).",
-        "Learned exit policies and patience-based rules, compared against the per-exit thresholds used here.",
-        "Evaluation on larger datasets (Tiny-ImageNet, ImageNet subsets), the full CIFAR-100-C benchmark and "
-        "pre-trained transformers.",
+        "Evaluation on larger datasets (Tiny-ImageNet, ImageNet subsets), the full CIFAR-100-C benchmark and pre-trained "
+        "transformers, with comparisons to learned and patience-based exit policies.",
     ]
     return T
 
@@ -377,11 +414,13 @@ def methodology(R, S):
         "measured with the expected calibration error (ECE, 15 bins).")
     R.h2("4.5 Threshold Selection")
     R.body(
-        "All thresholds are chosen on the validation set and then frozen. A **global threshold** is the cheapest single "
-        "value whose validation accuracy is within one point of the same model's final exit. **Per-exit thresholds** "
-        "start from the global value and are refined by coordinate descent, minimising validation cost subject to the "
-        "same accuracy constraint. Under corruption, the thresholds chosen on clean validation data are kept, as they "
-        "would be in deployment.")
+        "All thresholds are chosen on the validation set and then frozen. The main operating point uses a **global "
+        "threshold**, the cheapest single value whose validation accuracy is at least that of the same model's final "
+        "exit (no accuracy loss on validation). **Per-exit thresholds** start from this value and are refined by "
+        "coordinate descent, minimising validation cost under the same constraint. A **relaxed** point allows one "
+        "point of validation accuracy loss. As an optimistic reference we also report the smallest cost at which the "
+        "test accuracy reaches that of ResNet-18 (a threshold chosen on test, so an upper bound on the saving). Under "
+        "corruption, the thresholds chosen on clean validation data are kept, as they would be in deployment.")
     R.code(CODE_TUNE)
     R.h2("4.6 Metrics")
     R.bullets([
@@ -417,17 +456,16 @@ def setup(R, S):
         "the validation set, the clean test set and the 30 corrupted test sets, so that all exit rules, thresholds and "
         "ablations are evaluated offline from the same predictions. Latency was measured afterwards in a separate "
         "session that loads the seed-0 checkpoints, so all models were timed on the same idle machine. Results are "
-        "reported as mean +- standard deviation over seeds where three seeds are available.")
+        "reported as mean ± standard deviation over seeds where three seeds are available.")
 
 
-def _op_rows(m, base_cost, per_exit=False):
+def _op_rows(m, base_cost):
     rows = []
     for label in POLICIES:
         p = m["policies"][label]
-        t = (p["per_exit"] if per_exit else p)["test"]
-        rows.append((label + (", per-exit" if per_exit else ""), pm(t["acc"]), pm(t["cost"], 1, 3),
-                     f"{100 * (1 - t['cost'][0] / base_cost):.1f}",
-                     " / ".join(mean(f, d=0) for f in t["exit_frac"])))
+        for name, t in (("global", p["test"]), ("per-exit", p["per_exit"]["test"]), ("relaxed", p["relaxed"]["test"])):
+            rows.append((label, name, pm(t["acc"]), pm(t["cost"], 1, 3), f"{100 * (1 - t['cost'][0] / base_cost):.1f}",
+                         " / ".join(mean(f, d=0) for f in t["exit_frac"])))
     return rows
 
 
@@ -456,22 +494,23 @@ def results(R, S, T):
 
     R.h2("6.3 Accuracy versus Computation")
     R.figure("tradeoff.png", "Test accuracy against mean GFLOPs per image while sweeping a global threshold (mean "
-                             "and standard deviation over seeds). Dots are the thresholds selected on validation.",
+                             "and standard deviation over seeds). Dots are the main operating points selected on "
+                             "validation.",
              width=16.5)
-    hdr = ["Exit rule", "Test acc. (%)", "Mean GFLOPs", "FLOPs saved vs ResNet-18 (%)", "Exits 1/2/3/4 (%)"]
-    w = [3.8, 2.9, 2.6, 3.3, 4.0]
-    R.table(hdr, _op_rows(ee, bc) + _op_rows(ee, bc, True),
-            f"EE-ResNet-18: operating points selected on validation (ResNet-18: {pm(base['test_acc'][0])}% at "
-            f"{bc:.3f} GFLOPs).", widths=w, align_cols={1, 2, 3, 4}, size=8.5)
+    hdr = ["Exit rule", "Thresholds", "Test acc. (%)", "Mean GFLOPs", "Saved (%)", "Exits 1/2/3/4 (%)"]
+    w = [3.2, 2.2, 3.0, 2.8, 1.8, 3.6]
+    R.table(hdr, _op_rows(ee, bc),
+            f"EE-ResNet-18 operating points chosen on validation: global and per-exit thresholds with no validation "
+            f"loss, and a relaxed global threshold allowing one point. Savings are relative to ResNet-18 "
+            f"({pm(base['test_acc'][0])}% at {bc:.3f} GFLOPs).", widths=w, align_cols={2, 3, 4, 5}, size=8)
     if vt:
         vc = vt["gflops"][-1][0]
-        rows = _op_rows(vt, vc) + _op_rows(vt, vc, True)
-        R.table(["Exit rule", "Test acc. (%)", "Mean GFLOPs", "FLOPs saved vs full ViT (%)", "Exits 1/2/3/4 (%)"],
-                rows, f"EE-ViT-Tiny: operating points selected on validation (final exit {pm(vt['test_acc'][-1])}% at "
-                      f"{vc:.3f} GFLOPs).", widths=w, align_cols={1, 2, 3, 4}, size=8.5)
+        R.table(hdr, _op_rows(vt, vc),
+                f"EE-ViT-Tiny operating points, savings relative to its own full network ({pm(vt['test_acc'][-1])}% at "
+                f"{vc:.3f} GFLOPs).", widths=w, align_cols={2, 3, 4, 5}, size=8)
     R.body(T.get("tradeoff", ""))
-    R.figure("threshold_tuning.png", "Mean GFLOPs at the selected operating point with one global threshold and with "
-                                     "per-exit thresholds.", width=16)
+    R.figure("threshold_tuning.png", "Mean GFLOPs at the main operating point (no validation loss) with one global "
+                                     "threshold and with per-exit thresholds.", width=16)
     R.body(T.get("thresholds", ""))
     rows = []
     for name, m, ref in (("EE-ResNet-18", ee, bc), ("EE-ViT-Tiny", vt, vt["gflops"][-1][0] if vt else 1)):
