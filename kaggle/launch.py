@@ -47,7 +47,7 @@ JOBS = {
     "final-a": {"queues": [[vit(0), ee(1), r18(2)], [vit(2), POOL, r18(0)]]},
     "final-b": {"queues": [[vit(1), ee(2)], [ee(0), CE, r18(1)]]},
     "latency": {"queues": [[{"name": "latency", "steps": [
-        ["src.latency", "--runs", "/kaggle/input/*/*", "/kaggle/input/*/*/*", "--only", "_s0$", "--out", "{work}",
+        ["src.latency", "--runs", "/kaggle/input", "--only", "_s0$", "--out", "{work}",
          "--data", "{data}"]]}]],
         "sources": ["final-a", "final-b"]},
 }

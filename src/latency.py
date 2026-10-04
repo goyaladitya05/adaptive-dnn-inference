@@ -98,7 +98,7 @@ def throughput_suite(model, xs, dev, rows, temps):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--runs", nargs="+", required=True, help="globs matching run directories")
+    p.add_argument("--runs", nargs="+", required=True, help="roots searched recursively for metrics.json")
     p.add_argument("--only", default=".*", help="regex on the run directory name")
     p.add_argument("--out", required=True)
     p.add_argument("--data", default="data")
@@ -108,9 +108,14 @@ def main():
     p.add_argument("--threads", type=int, nargs="+", default=[1, 4])
     args = p.parse_args()
     dev = torch.device(args.device)
-    runs = sorted({os.path.dirname(m) for g in args.runs for m in glob.glob(os.path.join(g, "metrics.json"))})
-    runs = [r for r in runs if re.search(args.only, os.path.basename(r))]
+    found = {os.path.dirname(m) for g in args.runs for m in glob.glob(os.path.join(g, "**", "metrics.json"), recursive=True)}
+    runs = sorted((r for r in found if re.search(args.only, os.path.basename(r))), key=os.path.basename)
     print("runs:", runs, flush=True)
+    if not runs:
+        for g in args.runs:
+            for root, dirs, _ in os.walk(g):
+                if root.count(os.sep) - g.count(os.sep) < 4:
+                    print("dir:", root, flush=True)
     data = load_cifar100(args.data)
     x, y = to_device(data["test"], dev)
     xs = next(iter(GPULoader(x, y, len(y))))[0]
