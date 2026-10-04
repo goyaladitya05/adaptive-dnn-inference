@@ -1,0 +1,7 @@
+Adaptive_Inference_Project_Synopsis-1.pdf
+.venv/
+__pycache__/
+data/
+runs/
+*.pt
+*.npy
