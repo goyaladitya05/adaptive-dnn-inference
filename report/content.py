@@ -384,7 +384,7 @@ def overview(R, S):
     R.table(["Deliverable", "Status", "Where"], rows, "Interim status of project deliverables.", widths=[6.4, 4.6, 5.6])
 
 
-def literature(R):
+def literature(R, final=False):
     R.h1("2. Literature Review")
     R.body(
         "We reviewed ten papers covering early-exit CNNs [1], [2], [4], [8], input-dependent routing [3], [6], "
@@ -416,7 +416,24 @@ def literature(R):
         "(15 corruption types, 5 severities) that we follow. LGViT [9] brought early exits to vision transformers, "
         "showing that simple heads on shallow transformer blocks are weak and require specialised heads and "
         "self-distillation.")
+    if final:
+        R.body(
+            "**Exits under distribution shift.** Closest to our robustness study, Mehra et al. [17] evaluated SDN-style "
+            "multi-exit VGG-16 and ResNet-56 models on CIFAR-10/100-C and found that the loss of calibration under "
+            "corruption makes realistic exit strategies stop too early and misclassify more often; AugMix training "
+            "reduced the effect.")
     R.h2("2.2 Research Gap")
+    if final:
+        R.body(
+            "Most early-exit work decides with raw softmax confidence or entropy [1], [2], [4], [8], [9] without an "
+            "explicit calibration step, although networks, and early exits in particular, are overconfident [5], [10]. "
+            "Efficiency is mostly reported as FLOPs or exit depth [2]-[4], [8]-[10], although decision overhead can erase "
+            "theoretical savings [6]. Mehra et al. [17] showed that exit decisions of SDN-style CNNs degrade under common "
+            "corruptions, but how training choices such as self-distillation, transformer backbones and per-exit "
+            "calibration change this behaviour, and how it relates to measured latency, has not been studied together. "
+            "This project compares raw and calibrated exit rules on a CNN and a transformer, reports measured latency "
+            "next to FLOPs, and evaluates every exit policy under noise, blur and contrast corruptions.")
+        return
     R.body(
         "Most early-exit work decides with raw softmax confidence or entropy [1], [2], [4], [8], [9] without an explicit "
         "calibration step, although networks, and early exits in particular, are overconfident [5], [10]. Efficiency is "

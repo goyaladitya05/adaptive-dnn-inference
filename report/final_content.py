@@ -1,6 +1,10 @@
 """Text and tables of the final report. Numbers come from results/final/summary.json."""
 import content as C
 
+EXTRA_REFS = [
+    'A. Mehra, S. Seto, N. Jaitly, and B.-J. Theobald, "Understanding the robustness of multi-exit models under common '
+    'corruptions," arXiv:2212.01562, 2022.',
+]
 NAMES = {"resnet18": "ResNet-18 (Model 1)", "ee_resnet18_kd": "EE-ResNet-18 (Models 2, 3)",
          "ee_resnet18_ce": "EE-ResNet-18, no distillation", "ee_resnet18_pool": "EE-ResNet-18, pooling heads",
          "ee_vit_tiny": "EE-ViT-Tiny (Model 4)"}
@@ -283,8 +287,10 @@ def narrative(S):
         "batch 1 echoes BlockDrop's observation that sequential decisions can cost more than they save [6]. Like Meronen "
         "et al. [10] we find early exits miscalibrated; calibration improved routing for the underconfident ViT but not "
         "for the overconfident CNN on clean data, which we attribute to the threshold being shared across exits. "
-        "Self-distillation, used by LGViT [9] to strengthen early exits, improved efficiency here but made the exits "
-        "overconfident under corruption, an effect that the reviewed early-exit methods do not evaluate [7].")
+        "Under corruption we confirm, for a ResNet-18 trained with our recipe, the finding of Mehra et al. [17] that "
+        "miscalibration makes exits stop too early and misclassify. We add that self-distillation, used by LGViT [9] "
+        "to strengthen early exits, amplifies this effect while improving clean efficiency, and that the "
+        "underconfident exits of our ViT avoid it, although the ViT also differs in its training recipe.")
     T["limitations"] = (
         "All experiments use CIFAR-100 at 32x32 resolution with one CNN and one transformer; larger images and other "
         "architectures may behave differently. The corruptions re-implement 6 of the 19 CIFAR-100-C types. Latency was "
@@ -319,7 +325,7 @@ def write_body(R, S):
     R.para(f"Code repository: {C.REPO}", before=4)
     abstract(R, T)
     introduction(R, S)
-    C.literature(R)
+    C.literature(R, final=True)
     C.dataset(R, final=True)
     methodology(R, S)
     setup(R, S)
@@ -641,7 +647,7 @@ def conclusion(R, T):
 
 def references(R):
     R.h1("References")
-    for i, r in enumerate(C.REFS, 1):
+    for i, r in enumerate(C.REFS + EXTRA_REFS, 1):
         R.para(f"[{i}] {r}", size=9.5, after=2)
 
 
