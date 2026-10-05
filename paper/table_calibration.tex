@@ -1,0 +1,14 @@
+\begin{tabular}{lrrrrrr}
+\toprule
+ & \multicolumn{2}{c}{Exit 1, raw vs.\ TS} & \multicolumn{4}{c}{Clean GFLOPs at the strict point} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-7}
+Configuration & $\rho_s$ & AUROC & Raw, global & Raw, per-exit & TS, global & TS, per-exit \\
+\midrule
+CNN, plain, $\alpha$=0 & 0.995 & 0.849 / 0.849 & 0.66\,$\pm$\,0.01 & 0.61\,$\pm$\,0.01 & 0.72\,$\pm$\,0.05 & 0.65\,$\pm$\,0.04 \\
+CNN, plain, $\alpha$=0.5 & 0.991 & 0.845 / 0.844 & 0.54\,$\pm$\,0.04 & 0.50\,$\pm$\,0.01 & 0.61\,$\pm$\,0.07 & 0.55\,$\pm$\,0.02 \\
+CNN, strong & 0.985 & 0.832 / 0.843 & 1.05\,$\pm$\,0.08 & 0.88\,$\pm$\,0.04 & 1.07\,$\pm$\,0.13 & 0.83\,$\pm$\,0.02 \\
+ViT, plain & 0.956 & 0.828 / 0.838 & 0.20\,$\pm$\,0.01 & 0.20\,$\pm$\,0.01 & 0.29\,$\pm$\,0.11 & 0.24\,$\pm$\,0.06 \\
+ViT, strong, $\alpha$=0 & 0.991 & 0.843 / 0.849 & 0.51\,$\pm$\,0.02 & 0.43\,$\pm$\,0.05 & 0.49\,$\pm$\,0.03 & 0.38\,$\pm$\,0.02 \\
+ViT, strong & 0.987 & 0.836 / 0.844 & 0.45\,$\pm$\,0.01 & 0.37\,$\pm$\,0.03 & 0.42\,$\pm$\,0.01 & 0.34\,$\pm$\,0.03 \\
+\bottomrule
+\end{tabular}

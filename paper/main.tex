@@ -1,0 +1,207 @@
+\documentclass[10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,graphicx,xcolor}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[hidelinks]{hyperref}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf}
+\input{numbers}
+
+\title{Confident Exits Are Cheap but Brittle:\\ Training Recipes Govern Early-Exit Reliability under Distribution Shift}
+\author{Aditya Goyal \and Raunak Panshikar \and Arth Mishra \and Kartikey Goyal\\
+\small School of Computer Engineering, Manipal Institute of Technology, Manipal Academy of Higher Education}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Early-exit networks save computation by stopping an input at the first intermediate classifier whose confidence
+clears a threshold. Prior work showed that such exits lose calibration under common corruptions and stop too
+early. We ask what controls this behaviour. On CIFAR-100, with early-exit ResNet-18 and ViT-Tiny models, four
+distillation weights, two training recipes and their components, three seeds per configuration and 30 corruption
+conditions, we find that the confidence state of the exits, which we measure by their fitted temperature, predicts
+how reliable early exits remain under shift (Spearman $\rho=\rhoprec$ across \nruns{} runs), and that it is set by
+the training recipe rather than the architecture. A CNN trained with label smoothing, mixup and RandAugment becomes
+underconfident and lets only \cnnstrongearly\% of severely corrupted inputs exit early, \cnnstrongprec\% of them
+correctly, while a ViT trained without them becomes overconfident and lets \vitplainearly\% exit early with
+\vitplainprec\% accuracy. Self-distillation from the final exit, a standard way to strengthen early exits, raises
+confidence: it reduces clean computation at matched validation accuracy from \cnncecost{} to \cnnkdcost{} GFLOPs but
+raises the share of severely corrupted inputs that exit early from \cnnceearly\% to \cnnkdearly\%, with lower
+accuracy. Temperature scaling fitted on clean data barely re-ranks predictions (rank correlation $\geq\minrankcorr$)
+and is dominated by per-exit thresholds; temperatures fitted on held-out corruption types cut the final-exit
+calibration error of the distilled CNN at severity 5 from \cnnkdecets\% to \cnnkdeceloco\% and raise early-exit
+accuracy from \cnnkdprects\% to \cnnkdprecloco\%. Exit confidence should be treated as a design variable, not a
+by-product of training.
+\end{abstract}
+
+\section{Introduction}
+Early-exit networks attach classifiers at several depths of a backbone and stop each input at the first exit whose
+prediction is confident enough~\citep{teerapittayanon2016branchynet,huang2018msdnet,kaya2019sdn}. Easy inputs leave
+early and hard ones use the full network, which can halve the average computation at little cost in accuracy. The
+routing decision relies entirely on the confidence of each exit, so it inherits the well-known miscalibration of
+deep networks~\citep{guo2017calibration} and its degradation under distribution
+shift~\citep{ovadia2019trust,hendrycks2019benchmarking}. \citet{mehra2022robustness} showed that, under common
+corruptions, multi-exit CNNs become miscalibrated and their exits stop too early and misclassify.
+
+Practitioners make several choices that change how confident exits are: distilling the final exit into the early
+ones to strengthen them~\citep{phuong2019distillation,zhang2019byot}, regularising with label smoothing, mixup and
+strong augmentation, choosing a convolutional or a transformer backbone, and calibrating exits after
+training~\citep{meronen2024fixing}. How these choices affect the reliability of exit decisions under shift has not
+been studied together. We run a controlled study on CIFAR-100 and find:
+
+\begin{itemize}
+\item \textbf{Confidence state predicts reliability.} Across \nruns{} runs, the mean log-temperature of the early
+exits predicts the accuracy of early exits under severe corruption ($\rho=\rhoprec$): overconfident exits keep
+stopping inputs they misclassify, underconfident exits back off.
+\item \textbf{The recipe, not the architecture, sets the confidence state.} In a $2\times2$ design, a CNN trained
+with the transformer's strong recipe behaves like the transformer, and a transformer trained with the CNN's plain
+recipe behaves like the CNN (Section~\ref{sec:recipe}).
+\item \textbf{Self-distillation trades clean efficiency for reliability.} It makes exits more confident, cheaper on
+clean data and less reliable under shift, for both architectures (Section~\ref{sec:distill}).
+\item \textbf{Clean calibration is mostly re-thresholding.} Temperature scaling on clean data barely changes how
+exits rank inputs and is dominated by per-exit thresholds; temperatures fitted on other corruption types restore
+much of the lost reliability (Section~\ref{sec:calib}).
+\end{itemize}
+
+\section{Related work}
+\paragraph{Early-exit networks.} BranchyNet~\citep{teerapittayanon2016branchynet}, MSDNet~\citep{huang2018msdnet} and
+Shallow-Deep Networks~\citep{kaya2019sdn} exit on softmax confidence or entropy; later work reuses discarded
+predictions~\citep{wolczyk2021ztw}, distils later exits into earlier ones~\citep{phuong2019distillation,zhang2019byot},
+and brings early exits to vision transformers with self-distillation~\citep{xu2023lgvit}.
+\paragraph{Calibration of exits.} \citet{meronen2024fixing} fix overconfident exits with last-layer Laplace
+approximations, \citet{jazbec2023anytime} enforce conditional monotonicity for anytime prediction, and
+SAFE-KD~\citep{khazem2026safekd} combines exit distillation with conformal risk control.
+\paragraph{Calibration under shift.} Calibration degrades under dataset
+shift~\citep{ovadia2019trust,minderer2021revisiting}; label smoothing~\citep{muller2019labelsmoothing} and
+mixup~\citep{thulasidasan2019mixup,wang2023pitfall} change confidence, and calibrating across several domains can
+improve robustness~\citep{yu2022multidomain}.
+\paragraph{Early exits under shift.} Closest to our work, \citet{mehra2022robustness} evaluate SDN-style multi-exit
+CNNs on CIFAR-10/100-C, attribute the gap between oracle and practical exiting to miscalibration, and show that
+AugMix~\citep{hendrycks2020augmix} reduces it. We extend their analysis to distillation, to transformers, to a design
+that separates architecture from recipe, and to post-hoc calibration with data from other shifts.
+
+\section{Setup}
+\paragraph{Data and shift.} CIFAR-100 with a stratified 45k/5k train/validation split; the official test set is used
+only for reporting. We re-implement six CIFAR-100-C corruptions~\citep{hendrycks2019benchmarking} (Gaussian, shot and
+impulse noise, Gaussian and defocus blur, contrast) at five severities with the original constants, for both the
+validation and the test images, giving 30 shifted versions of each.
+\paragraph{Models.} EE-ResNet-18 (CIFAR stem, exits after each of the four stages; heads of strided $3\times3$
+convolutions, pooling and a linear layer; 12.2M parameters, 0.37 to 1.21 GFLOPs per exit) and EE-ViT-Tiny (patch 4,
+width 192, 12 blocks, exits after blocks 3, 6, 9, 12; 5.4M parameters, 0.18 to 0.72 GFLOPs).
+\paragraph{Training.} 200 epochs, SGD for ResNets and AdamW for ViTs, fp16 on Kaggle T4 GPUs. The \emph{plain}
+recipe uses random crops and flips; the \emph{strong} recipe adds label smoothing 0.1, mixup or CutMix on every batch
+and RandAugment. Exits are trained jointly with equally weighted losses; with self-distillation weight $\alpha$ each
+early exit minimises $(1-\alpha)\,\mathrm{CE}+\alpha\,\tau^2\,\mathrm{KL}(p_{\text{final}}^{\tau}\,\|\,p_k^{\tau})$
+with $\tau=3$ and the final exit's prediction detached. Unless stated otherwise $\alpha=0.5$, and each configuration
+is trained with three seeds.
+\paragraph{Routing and metrics.} An input exits at the first exit whose maximum softmax probability clears a
+threshold. The \emph{strict operating point} is the cheapest threshold whose validation accuracy is at least that of
+the model's own final exit; we report clean GFLOPs at this point. Under shift we keep the clean thresholds and report
+the share of inputs that exit early and the accuracy of those early exits. The \emph{confidence state} of a model is
+the mean log-temperature of its early exits, with temperatures fitted on clean validation data by
+NLL~\citep{guo2017calibration}: positive values mean overconfident exits, negative values underconfident ones.
+\emph{TS-LOCO} fits temperatures on clean validation data pooled with the corrupted validation data of the five
+corruption types other than the one being tested.
+
+\begin{table}[t]
+\centering\small
+\caption{All configurations (mean $\pm$ std over seeds). Clean GFLOPs at the strict operating point; early-exit
+share and accuracy at corruption severity 5, averaged over the six corruptions, with clean thresholds.}
+\label{tab:main}
+\resizebox{\linewidth}{!}{\input{table_main}}
+\end{table}
+
+\section{Results}
+\subsection{The recipe, not the architecture, sets exit reliability}\label{sec:recipe}
+Figure~\ref{fig:twobytwo} and Table~\ref{tab:main} cross architecture with recipe. With the plain recipe both
+architectures are overconfident (mean $\log T$ of \cnnkdlogt{} for the CNN and \vitplainlogt{} for the ViT), and
+their exits keep stopping corrupted inputs: at severity 5, \cnnkdearly\% and \vitplainearly\% of inputs exit early,
+with \cnnkdprec\% and \vitplainprec\% accuracy. With the strong recipe both become underconfident (\cnnstronglogt{}
+and \vitkdlogt) and back off as severity grows: only \cnnstrongearly\% and \vitkdearly\% of severely corrupted inputs
+exit early, with \cnnstrongprec\% and \vitkdprec\% accuracy. Across all \nruns{} runs the confidence state predicts
+early-exit accuracy under severe corruption with $\rho=\rhoprec$ (Figure~\ref{fig:confidence}, left). The strong
+recipe also improves accuracy (\cnnstrongfinal\% against \cnnkdfinal\% for the CNN), but its underconfident exits
+rarely clear the threshold on clean data, so the strict operating point costs \cnnstrongcost{} GFLOPs against
+\cnnkdcost{} with the plain recipe.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/two_by_two.pdf}
+\caption{Architecture $\times$ recipe ($\alpha=0.5$, mean $\pm$ std over three seeds, averaged over six
+corruptions). Overconfident models (plain recipe) keep exiting early as accuracy collapses; underconfident models
+(strong recipe) back off, whatever the backbone.}
+\label{fig:twobytwo}
+\end{figure}
+
+\subsection{Self-distillation trades clean efficiency for reliability}\label{sec:distill}
+Distilling the final exit into the early ones strengthens them (exit-1 accuracy \cnncefirst\% at $\alpha=0$ against
+\cnnkdfirst\% at $\alpha=0.5$) and makes routing cheaper on clean data (\cnncecost{} to \cnnkdcost{} GFLOPs at the
+strict point). It also makes the exits more confident: at severity 5, the share of inputs exiting early rises from
+\cnnceearly\% to \cnnkdearly\% and their accuracy falls from \cnnceprec\% to \cnnkdprec\%. The confidence gap of
+exit 1 (mean confidence minus accuracy) at severity 5 grows from \cnncegap{} to \cnnkdgap{} points. The same
+direction holds for the ViT trained with the strong recipe (early exits \vitceearly\% to \vitkdearly\%, accuracy
+\vitceprec\% to \vitkdprec\%), although its exits stay underconfident. Figure~\ref{fig:confidence} (middle and
+right) shows the dose-response over $\alpha$.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/confidence.pdf}
+\caption{Left: confidence state of every run against the accuracy of early exits at severity 5 (filled: strong
+recipe). Middle and right: distillation weight against clean cost at the strict point and the share of severely
+corrupted inputs exiting early (mean $\pm$ std over seeds).}
+\label{fig:confidence}
+\end{figure}
+
+\subsection{Clean calibration is mostly re-thresholding}\label{sec:calib}
+Temperature scaling never changes predictions, and in practice it barely changes how an exit ranks inputs: the rank
+correlation between raw and scaled confidence is at least \minrankcorr{} in every run, and the AUROC for separating
+correct from incorrect predictions moves by at most 0.01 (Table~\ref{tab:calib}). With a single global threshold its
+main effect is therefore to shift the effective threshold of each exit. Tuning one threshold per exit directly on the
+raw scores is cheaper than temperature scaling with a global threshold in every configuration, and for overconfident
+models it is also cheaper than scaling with per-exit thresholds.
+
+Under shift, temperatures fitted on clean data help overconfident models only partly and make underconfident models
+worse calibrated (Table~\ref{tab:shift}). Fitting temperatures on data from other corruption types (TS-LOCO) is far
+more effective for overconfident models: for the distilled CNN at severity 5, final-exit ECE falls from \cnnkdeceraw\%
+(raw) and \cnnkdecets\% (clean TS) to \cnnkdeceloco\%, and the accuracy of early exits rises from \cnnkdprec\% to
+\cnnkdprecloco\%, at the price of more computation on clean data (\cnnkdcost{} to \cnnkdcostloco{} GFLOPs at the
+strict point).
+
+\begin{table}[t]
+\centering\small
+\caption{Temperature scaling (TS) barely re-ranks inputs ($\rho_s$: rank correlation of raw and scaled confidence;
+AUROC of confidence for correctness, raw / TS), and per-exit thresholds on raw scores beat a global threshold after
+TS.}
+\label{tab:calib}
+\resizebox{\linewidth}{!}{\input{table_calibration}}
+\end{table}
+
+\begin{table}[t]
+\centering\small
+\caption{Calibration under shift. TS uses temperatures fitted on clean validation data; TS-LOCO pools clean
+validation data with the five other corruption types. Last column: clean GFLOPs at the strict point, raw / TS-LOCO.}
+\label{tab:shift}
+\resizebox{\linewidth}{!}{\input{table_shift}}
+\end{table}
+
+\section{Discussion and limitations}
+Early exits are often tuned for clean efficiency, and the choices that maximise it (distillation, little
+regularisation) produce confident exits that are the least reliable when inputs drift. Choices that make exits
+underconfident (label smoothing, mixup, strong augmentation) make exit decisions safer under shift but cost
+efficiency at a strict accuracy target. Calibration fitted only on clean data does not resolve this trade-off,
+whereas calibration fitted on diverse shifts does, which suggests calibrating exits on a mixture of anticipated
+shifts when early-exit models are deployed in changing conditions. Our study is limited to CIFAR-100 at $32\times32$
+resolution, one CNN and one transformer trained from scratch, six synthetic corruption types and three seeds per
+configuration; component ablations use a single seed. TS-LOCO uses labelled corrupted data from other corruption
+types, which is available only when such shifts can be simulated.
+
+\section{Conclusion}
+The reliability of early-exit decisions under distribution shift is governed by how confident the exits are, and
+that confidence is set by the training recipe and by distillation rather than by the architecture. Confident exits
+are cheap but brittle; underconfident exits are careful but costly. Exit confidence should be measured and chosen
+deliberately, and calibrated on shifted data when early-exit models face changing inputs.
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+\end{document}
