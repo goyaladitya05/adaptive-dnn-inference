@@ -95,7 +95,7 @@ def analyze_run(r):
     yv, yt = np.load(os.path.join(d, "logits", "val_labels.npy")), np.load(os.path.join(d, "logits", "test_labels.npy"))
     cv, ct = lv.argmax(-1).numpy() == yv, lt.argmax(-1).numpy() == yt
     temps = r["temperature"]
-    target = r["acc"]["val"][-1]
+    target = float(cv[-1].mean())  # from the stored fp16 logits, so the final exit always meets it
     out = {"seed": r["seed"], "test_acc": r["acc"]["test"], "temperature": temps,
            "log_t_early": float(np.mean(np.log(temps[:-1]))), "ece_raw": r["ece_test"]["raw"],
            "ece_ts": r["ece_test"]["calibrated"]}
@@ -119,6 +119,7 @@ def analyze_run(r):
     conf_gap = {s: [] for s in SEV}
     agree = {s: [] for s in SEV}
     ece_shift = {key: {s: [] for s in SEV} for key in ("raw", "ts", "loco")}
+    clean_loco = []
     for ci, c in enumerate(CORRUPTIONS):
         loco = None
         if r["val_dir"]:
@@ -128,6 +129,7 @@ def analyze_run(r):
             loco = [fit_temperature(lp[i], torch.from_numpy(yp)) for i in range(k)]
             sv = exit_scores(lv, "max_prob", True, loco)
             th_loco = pick_threshold(sweep(sv, cv, costs), target)
+            clean_loco.append(routing_stats(route(exit_scores(lt, "max_prob", True, loco), th_loco), ct, costs))
         for s in SEV:
             lg = load(d, f"{c}_{s}")
             for key, policy, cal, tt in (("mp", "max_prob", False, temps), ("mp_ts", "max_prob", True, temps),
@@ -146,6 +148,8 @@ def analyze_run(r):
     avg = lambda rows, key: float(np.nanmean([x[key] for x in rows]))  # noqa: E731
     out["shift"] = {key: {s: {m: avg(v[s], m) for m in ("acc", "cost", "early_frac", "early_acc")} for s in SEV}
                     for key, v in shift.items() if v["1"]}
+    if clean_loco:
+        out["clean_loco"] = {m: float(np.mean([x[m] for x in clean_loco])) for m in ("acc", "cost")}
     out["conf_gap_exit1"] = {s: float(np.mean(v)) for s, v in conf_gap.items()}
     out["agree_exit1_final"] = {s: float(np.mean(v)) for s, v in agree.items()}
     out["ece_shift"] = {key: {s: np.mean(v[s], 0).tolist() for s in SEV} for key, v in ece_shift.items() if v["1"]}
