@@ -71,6 +71,9 @@ def macros(study, final):
         out[key + "early"] = g(lambda r: r["shift"]["mp"]["5"]["early_frac"], 100, 0)
         out[key + "prec"] = g(lambda r: r["shift"]["mp"]["5"]["early_acc"], 100, 0)
         out[key + "gap"] = g(lambda r: r["conf_gap_exit1"]["5"], 100, 0)
+        out[key + "ecefirst"] = g(lambda r: r["ece_raw"][0], 100, 1)
+        out[key + "ecefinal"] = g(lambda r: r["ece_raw"][-1], 100, 1)
+        out[key + "tfinal"] = g(lambda r: r["temperature"][-1], 1, 2)
         if "mp_loco" in R[0]["shift"]:
             out[key + "prects"] = g(lambda r: r["shift"]["mp_ts"]["5"]["early_acc"], 100, 0)
             out[key + "precloco"] = g(lambda r: r["shift"]["mp_loco"]["5"]["early_acc"], 100, 0)
@@ -81,7 +84,8 @@ def macros(study, final):
             if "clean_loco" in R[0]:
                 out[key + "costloco"] = g(lambda r: r["clean_loco"]["cost"], 1, 2)
     for _, _, key in ROWS:
-        for suffix in ("final", "first", "logt", "temp", "cost", "costpe", "costts", "early", "prec", "gap", "prects",
+        for suffix in ("final", "first", "logt", "temp", "cost", "costpe", "costts", "early", "prec", "gap", "ecefirst",
+                       "ecefinal", "tfinal", "prects",
                        "precloco", "earlyloco", "eceraw", "ecets", "eceloco", "costloco"):
             out.setdefault(key + suffix, "--")
     corr = study["correlations"]
