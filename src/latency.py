@@ -64,7 +64,7 @@ def operating_points(run, metrics, tol):
     lv = torch.from_numpy(np.load(os.path.join(run, "logits", "val.npy")).astype(np.float32))
     correct = lv.argmax(-1).numpy() == np.load(os.path.join(run, "logits", "val_labels.npy"))
     costs = metrics["flops"]["cumulative"]
-    target = metrics["acc"]["val"][-1] - tol
+    target = float(correct[-1].mean()) - tol
     return {label: pick_threshold(sweep(exit_scores(lv, p, cal, metrics["temperature"]), correct, costs), target)
             for p, cal, label in POLICIES}
 

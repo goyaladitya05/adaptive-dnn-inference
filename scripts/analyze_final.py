@@ -81,7 +81,8 @@ def analyze_run(r, ref_cost, match_acc):
     lv, lt = load(d, "val"), load(d, "test")
     yv, yt = labels(d, "val"), labels(d, "test")
     cv, ct = lv.argmax(-1).numpy() == yv, lt.argmax(-1).numpy() == yt
-    target, relaxed = out["val_acc"][-1] - TOL, out["val_acc"][-1] - TOL_RELAXED
+    final_val = float(cv[-1].mean())  # from the stored logits, so the final exit always meets the target
+    target, relaxed = final_val - TOL, final_val - TOL_RELAXED
     match_acc = match_acc if match_acc is not None else out["test_acc"][-1]
     budgets = [round(f * ref_cost, 4) for f in (0.35, 0.5, 0.65, 0.8)]
     out["budgets"] = budgets
